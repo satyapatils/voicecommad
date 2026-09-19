@@ -16,10 +16,12 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f7f4ef; color: #2
 .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #888; margin-right: 7px; }
 .status-listening .status-dot { background: #2e9d50; }
 .status-speaking .status-dot { background: #d99000; }
+.status-wake .status-dot { background: #2d7dd2; }
 .status-error .status-dot { background: #d33; }
 .mic-area { text-align: center; padding: 10px 0 20px; }
 #micButton { width: 115px; height: 115px; border-radius: 50%; border: none; background: #5b2c1f; color: white; font-size: 46px; cursor: pointer; box-shadow: 0 7px 20px rgba(91,44,31,0.3); }
 #micButton.listening { background: #a33b25; animation: pulse 1.3s infinite; }
+#micButton.wake { background: #2d7dd2; }
 @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.08); } 100% { transform: scale(1); } }
 .mic-label { margin-top: 12px; font-size: 16px; color: #666; }
 .section-title { font-weight: bold; font-size: 18px; margin-bottom: 10px; }
@@ -44,39 +46,34 @@ button.secondary { border: 1px solid #5b2c1f; background: white; color: #5b2c1f;
 </div>
 
 <div class="container">
-  <!-- STATUS -->
   <div class="card">
     <div id="status" class="status">
       <span class="status-dot"></span>
-      <span id="statusText">Starting...</span>
+      <span id="statusText">Tap Start to begin</span>
     </div>
     <div class="mic-area">
-      <button id="micButton" onclick="toggleListening()">🎙️</button>
-      <div class="mic-label" id="micLabel">Tap to speak</div>
-      <div class="hint">Example: "Give me two masala dosa and one coffee"</div>
+      <button id="micButton" onclick="onMicTap()">🎙️</button>
+      <div class="mic-label" id="micLabel">Tap to start</div>
+      <div class="hint">After starting, just say "Hey Roots and Ruchi" to order.</div>
     </div>
   </div>
 
-  <!-- CUSTOMER SPEECH -->
   <div class="card">
     <div class="section-title">🗣️ You said</div>
-    <div id="heard" class="heard">Waiting for your order...</div>
+    <div id="heard" class="heard">Waiting...</div>
   </div>
 
-  <!-- ASSISTANT -->
   <div class="card">
     <div class="section-title">🤖 Roots & Ruchi</div>
-    <div id="assistant" class="assistant">Hello! Welcome to Roots & Ruchi.</div>
+    <div id="assistant" class="assistant">Tap Start, then say "Hey Roots and Ruchi".</div>
   </div>
 
-  <!-- CART -->
   <div class="card">
     <div class="section-title">🛒 Your Order</div>
     <div id="cart"><div class="empty">Your cart is empty.</div></div>
     <div class="total"><span>Total</span><span id="total">₹0</span></div>
   </div>
 
-  <!-- CONTROLS -->
   <div class="card">
     <div class="buttons">
       <button class="secondary" onclick="startNewOrder()">🔄 New Order</button>
@@ -93,231 +90,173 @@ button.secondary { border: 1px solid #5b2c1f; background: white; color: #5b2c1f;
 const APPS_SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbwT0MBiq-vS2yI4QQ1TIuyOb3h6xDPFpXIJPBNAyW7vipLcZFGL2KEoKwLww_GnLUgqnw/exec";
 
+// Wake phrase variants (tolerant to what the browser hears).
+const WAKE_PATTERNS = [
+  "roots and ruchi", "root and ruchi", "hey roots", "hi roots",
+  "hello roots", "roots ruchi", "hey ruchi", "hi ruchi", "rootsandruchi"
+];
+
 /* =====================================================
-   APPLICATION STATE
+   STATE
 ===================================================== */
 let sessionId = "";
-let listening = false;
+let currentLanguage = "en-IN";
+let started = false;             // has the user tapped Start once?
+
+// Two modes for the single recognition object:
+//   'WAKE'  -> listening for the wake phrase (idle)
+//   'ORDER' -> capturing a real order/utterance
+let mode = "WAKE";
 let recognition = null;
 let supportsSpeech = false;
-let currentLanguage = "en-IN";   // updated after the customer picks a language
-let currentAudio = null;         // the currently-playing Sarvam audio element
-let audioUnlocked = false;       // becomes true after first user gesture
-let sharedAudio = null;          // one reusable <audio> element (autoplay-safe)
-let finalTranscript = "";        // accumulates final STT chunks for one turn
+let finalTranscript = "";
+let restartTimer = null;
+
+// Audio
+let currentAudio = null;
+let sharedAudio = null;
+let audioUnlocked = false;
 
 /* =====================================================
    UI HELPERS
 ===================================================== */
 function $(id) { return document.getElementById(id); }
-
 function setStatus(text, type) {
   $("statusText").textContent = text;
-  const status = $("status");
-  status.className = "status";
-  if (type) { status.classList.add("status-" + type); }
+  const s = $("status"); s.className = "status";
+  if (type) s.classList.add("status-" + type);
 }
-function setAssistant(text) { $("assistant").textContent = text || ""; }
-function setHeard(text) { $("heard").textContent = text || ""; }
-function showError(text) { $("error").textContent = text || ""; }
+function setAssistant(t) { $("assistant").textContent = t || ""; }
+function setHeard(t) { $("heard").textContent = t || ""; }
+function showError(t) { $("error").textContent = t || ""; }
+function setMic(state) {
+  const b = $("micButton");
+  b.classList.remove("listening", "wake");
+  if (state === "order") { b.classList.add("listening"); b.textContent = "🎙️"; }
+  else if (state === "wake") { b.classList.add("wake"); b.textContent = "👂"; }
+  else { b.textContent = "🎙️"; }
+}
 
 /* =====================================================
-   JSONP CALL TO APPS SCRIPT
+   JSONP
 ===================================================== */
-function callBackend(action, params, callback) {
-  const callbackName =
-    "rootsRuchiCallback_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
-
-  const query = new URLSearchParams();
-  query.set("api", "voice");
-  query.set("action", action);
-  query.set("callback", callbackName);
-
+function callBackend(action, params, cb) {
+  const name = "rrcb_" + Date.now() + "_" + Math.floor(Math.random() * 1e6);
+  const q = new URLSearchParams();
+  q.set("api", "voice"); q.set("action", action); q.set("callback", name);
   params = params || {};
-  Object.keys(params).forEach(function (key) {
-    query.set(key, params[key] == null ? "" : params[key]);
-  });
+  Object.keys(params).forEach(k => q.set(k, params[k] == null ? "" : params[k]));
 
   const script = document.createElement("script");
-
-  window[callbackName] = function (response) {
-    try { callback(null, response); }
-    catch (e) { callback(e, null); }
-    delete window[callbackName];
-    script.remove();
+  window[name] = function (res) {
+    try { cb(null, res); } catch (e) { cb(e, null); }
+    delete window[name]; script.remove();
   };
-
   script.onerror = function () {
-    callback(new Error("Unable to connect to Roots & Ruchi backend."), null);
-    delete window[callbackName];
-    script.remove();
+    cb(new Error("Unable to connect to backend."), null);
+    delete window[name]; script.remove();
   };
-
-  script.src = APPS_SCRIPT_URL + "?" + query.toString();
+  script.src = APPS_SCRIPT_URL + "?" + q.toString();
   document.body.appendChild(script);
 }
 
 /* =====================================================
-   AUDIO PLAYBACK
-   The backend (Sarvam TTS) returns base64 WAV in response.audio for EVERY
-   language. We play that. Browser speechSynthesis is only a fallback for
-   English when no audio is provided (it cannot speak Indian languages).
+   AUDIO
 ===================================================== */
-/**
- * Unlock audio on a real user gesture (mic tap). We reuse ONE <audio> element
- * for all playback. Browsers allow a media element to play later (even from a
- * non-gesture callback) once it has been played once inside a gesture. This is
- * what makes the Kannada/Hindi audio actually sound instead of being blocked.
- */
 function unlockAudio() {
-  if (audioUnlocked) { return; }
+  if (audioUnlocked) return;
   try {
-    if (!sharedAudio) { sharedAudio = new Audio(); }
-    // Tiny silent WAV to satisfy the gesture requirement.
-    sharedAudio.src =
-      "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
+    if (!sharedAudio) sharedAudio = new Audio();
+    sharedAudio.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
     const p = sharedAudio.play();
-    if (p && p.then) {
-      p.then(function () {
-        sharedAudio.pause();
-        sharedAudio.currentTime = 0;
-      }).catch(function () {});
-    }
+    if (p && p.then) p.then(() => { sharedAudio.pause(); sharedAudio.currentTime = 0; }).catch(() => {});
     audioUnlocked = true;
-  } catch (e) {
-    console.log("unlockAudio failed:", e);
-  }
+  } catch (e) {}
 }
 
-function playResponseAudio(response) {
-  // Stop any speech already playing.
+function playResponseAudio(res, onDone) {
   stopAllAudio();
-
-  if (response && response.audio) {
+  if (res && res.audio) {
     try {
       setStatus("Speaking...", "speaking");
-
-      // Reuse the unlocked shared element so playback is not autoplay-blocked.
-      if (!sharedAudio) { sharedAudio = new Audio(); }
+      if (!sharedAudio) sharedAudio = new Audio();
       currentAudio = sharedAudio;
-      currentAudio.src = "data:audio/wav;base64," + response.audio;
-      currentAudio.onended = function () {
-        if (!listening) { setStatus("Ready", ""); }
-      };
-
+      currentAudio.src = "data:audio/wav;base64," + res.audio;
+      currentAudio.onended = function () { if (onDone) onDone(); };
       const p = currentAudio.play();
-      if (p && p.catch) {
-        p.catch(function (err) {
-          console.error("Audio play blocked:", err);
-          // Still blocked (audio never unlocked) -> English browser fallback.
-          browserSpeak(response.speakEnglish || response.speak);
-        });
-      }
+      if (p && p.catch) p.catch(function () {
+        browserSpeak(res.speakEnglish || res.speak, onDone);
+      });
       return;
-    } catch (e) {
-      console.error("playResponseAudio failed:", e);
-    }
+    } catch (e) {}
   }
-
-  // No Sarvam audio -> browser fallback (English only).
-  browserSpeak((response && (response.speak || response.speakEnglish)) || "");
+  browserSpeak((res && (res.speak || res.speakEnglish)) || "", onDone);
 }
 
-function browserSpeak(text) {
-  if (!text || !("speechSynthesis" in window)) { return; }
+function browserSpeak(text, onDone) {
+  if (!text || !("speechSynthesis" in window)) { if (onDone) onDone(); return; }
   try {
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "en-IN";
-    utterance.onstart = function () { setStatus("Speaking...", "speaking"); };
-    utterance.onend = function () { if (!listening) { setStatus("Ready", ""); } };
-    window.speechSynthesis.speak(utterance);
-  } catch (e) {
-    console.log("Speech synthesis error:", e);
-  }
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "en-IN";
+    u.onstart = function () { setStatus("Speaking...", "speaking"); };
+    u.onend = function () { if (onDone) onDone(); };
+    window.speechSynthesis.speak(u);
+  } catch (e) { if (onDone) onDone(); }
 }
 
 function stopAllAudio() {
-  if (currentAudio) {
-    try { currentAudio.pause(); currentAudio.currentTime = 0; } catch (e) {}
-    // Do NOT null out the shared element — we reuse it for the next clip.
-  }
-  if ("speechSynthesis" in window) {
-    try { window.speechSynthesis.cancel(); } catch (e) {}
-  }
+  if (currentAudio) { try { currentAudio.pause(); currentAudio.currentTime = 0; } catch (e) {} }
+  if ("speechSynthesis" in window) { try { window.speechSynthesis.cancel(); } catch (e) {} }
 }
 
 /* =====================================================
-   START SESSION  (begins multilingual onboarding)
+   SESSION
 ===================================================== */
-function startSession() {
+function startSession(onReady) {
   setStatus("Connecting...", "");
-  // ONBOARD_START greets and asks for the language (spoken in English).
-  callBackend("ONBOARD_START", {}, function (error, response) {
-    if (error) {
-      showError(error.message);
-      setStatus("Backend connection failed", "error");
-      return;
+  callBackend("ONBOARD_START", {}, function (err, res) {
+    if (err) { showError(err.message); setStatus("Backend connection failed", "error"); return; }
+    if (!res || res.ok === false) {
+      showError(res && res.error ? res.error : "Unable to start session.");
+      setStatus("Backend error", "error"); return;
     }
-    if (!response || response.ok === false) {
-      showError(response && response.error ? response.error : "Unable to start session.");
-      setStatus("Backend error", "error");
-      return;
-    }
-
-    sessionId = response.sessionId || "";
-    currentLanguage = response.language || "en-IN";
-    applyRecognitionLanguage();
-
-    setStatus("Ready", "");
-    setAssistant(response.speak || "");
-    playResponseAudio(response);
-    showCart();
+    sessionId = res.sessionId || "";
+    currentLanguage = res.language || "en-IN";
+    applyLang();
+    setAssistant(res.speak || "");
+    // Speak greeting, then go into wake-listening.
+    playResponseAudio(res, function () {
+      showCart();
+      if (onReady) onReady();
+    });
   });
 }
 
 /* =====================================================
-   SEND CUSTOMER UTTERANCE
-   COMMAND drives onboarding first (language -> name -> phone), then ordering.
-   The backend decides which; the frontend just sends the transcript.
+   SEND UTTERANCE (order turn)
 ===================================================== */
 function processUtterance(text) {
   text = String(text || "").trim();
-  if (!text) { return; }
+  if (!text) { goWake(); return; }
 
   setHeard(text);
   setStatus("Thinking...", "");
-
-  callBackend("COMMAND", { sessionId: sessionId, text: text }, function (error, response) {
-    if (error) {
-      showError(error.message);
-      setStatus("Backend error", "error");
-      return;
+  callBackend("COMMAND", { sessionId: sessionId, text: text }, function (err, res) {
+    if (err) { showError(err.message); setStatus("Error", "error"); goWake(); return; }
+    if (!res || res.ok === false) {
+      showError(res && res.error ? res.error + (res.detail ? " — " + res.detail : "") : "Something went wrong.");
+      setStatus("Error", "error"); goWake(); return;
     }
-    if (!response || response.ok === false) {
-      showError(response && response.error
-        ? response.error + (response.detail ? " — " + response.detail : "")
-        : "Something went wrong.");
-      setStatus("Error", "error");
-      return;
-    }
-
     showError("");
+    if (res.sessionId) sessionId = res.sessionId;
+    if (res.language && res.language !== currentLanguage) { currentLanguage = res.language; applyLang(); }
+    if (res.speak) setAssistant(res.speak);
+    if (res.cart) renderCart(res.cart);
 
-    // Keep the session + language in sync with the backend.
-    if (response.sessionId) { sessionId = response.sessionId; }
-    if (response.language && response.language !== currentLanguage) {
-      currentLanguage = response.language;
-      applyRecognitionLanguage();
-    }
-
-    if (response.speak) {
-      setAssistant(response.speak);
-    }
-    playResponseAudio(response);
-
-    if (response.cart) { renderCart(response.cart); }
-    setStatus("Ready", "");
+    // After the assistant finishes speaking, listen for the NEXT order turn
+    // directly (conversation continues without needing the wake word again).
+    playResponseAudio(res, function () { goOrder(); });
   });
 }
 
@@ -325,181 +264,184 @@ function processUtterance(text) {
    CART
 ===================================================== */
 function showCart() {
-  if (!sessionId) { return; }
-  callBackend("CART", { sessionId: sessionId }, function (error, response) {
-    if (error) { showError(error.message); return; }
-    if (!response || response.ok === false) { return; }
-    renderCart(response);
+  if (!sessionId) return;
+  callBackend("CART", { sessionId: sessionId }, function (err, res) {
+    if (err || !res || res.ok === false) return;
+    renderCart(res);
   });
 }
-
 function renderCart(cart) {
-  const container = $("cart");
-  container.innerHTML = "";
-
+  const c = $("cart"); c.innerHTML = "";
   if (!cart || !cart.items || cart.items.length === 0) {
-    container.innerHTML = '<div class="empty">Your cart is empty.</div>';
-    $("total").textContent = "₹0";
-    return;
+    c.innerHTML = '<div class="empty">Your cart is empty.</div>';
+    $("total").textContent = "₹0"; return;
   }
-
-  cart.items.forEach(function (item) {
-    const row = document.createElement("div");
-    row.className = "cart-item";
-
+  cart.items.forEach(function (it) {
+    const row = document.createElement("div"); row.className = "cart-item";
     const left = document.createElement("div");
-    left.innerHTML =
-      '<div class="cart-name">' + escapeHtml(item.itemName) + '</div>' +
-      '<div class="cart-qty">' + item.quantity + " × ₹" + item.unitPrice + "</div>";
-
-    const right = document.createElement("div");
-    right.textContent = "₹" + item.lineTotal;
-
-    row.appendChild(left);
-    row.appendChild(right);
-    container.appendChild(row);
+    left.innerHTML = '<div class="cart-name">' + esc(it.itemName) + '</div>' +
+      '<div class="cart-qty">' + it.quantity + " × ₹" + it.unitPrice + "</div>";
+    const right = document.createElement("div"); right.textContent = "₹" + it.lineTotal;
+    row.appendChild(left); row.appendChild(right); c.appendChild(row);
   });
-
   $("total").textContent = "₹" + (cart.total || 0);
 }
-
-function escapeHtml(value) {
-  return String(value || "")
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+function esc(v) {
+  return String(v || "").replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
 /* =====================================================
-   SPEECH RECOGNITION (STT)
-   recognition.lang follows the chosen language so the browser transcribes
-   the customer in the right language after onboarding.
+   SPEECH RECOGNITION — wake word + order capture
 ===================================================== */
-function applyRecognitionLanguage() {
-  if (recognition) {
-    recognition.lang = currentLanguage || "en-IN";
-  }
+function applyLang() {
+  if (recognition) recognition.lang = (mode === "ORDER") ? (currentLanguage || "en-IN") : "en-IN";
 }
 
-function setupSpeechRecognition() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-  if (!SpeechRecognition) {
+function setupRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
     supportsSpeech = false;
     setStatus("Speech recognition not supported", "error");
     $("micLabel").textContent = "Please use Google Chrome";
-    $("micButton").disabled = true;
     return;
   }
-
   supportsSpeech = true;
-  recognition = new SpeechRecognition();
-  recognition.lang = currentLanguage || "en-IN";
-  recognition.interimResults = true;   // see partials, but wait for finals
-  recognition.continuous = true;       // don't stop at the first pause
-  recognition.maxAlternatives = 1;
-
-  recognition.onstart = function () {
-    listening = true;
-    finalTranscript = "";              // reset accumulator for this turn
-    $("micButton").classList.add("listening");
-    $("micButton").textContent = "🛑";
-    $("micLabel").textContent = "Listening... (tap 🛑 when done)";
-    setStatus("Listening...", "listening");
-  };
+  recognition = new SR();
+  recognition.interimResults = true;
+  recognition.continuous = true;
+  recognition.maxAlternatives = 3;
 
   recognition.onresult = function (event) {
-    // Accumulate ALL final results so a multi-item sentence spoken with pauses
-    // (e.g. "one masala dosa ... one plain dosa") is captured in full instead
-    // of being cut off at the first pause.
-    let interim = "";
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const chunk = event.results[i][0].transcript;
-      if (event.results[i].isFinal) {
-        finalTranscript += chunk + " ";
-      } else {
-        interim += chunk;
+    if (mode === "WAKE") {
+      // Scan all alternatives of all results for the wake phrase.
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        for (let a = 0; a < event.results[i].length; a++) {
+          const heard = (event.results[i][a].transcript || "").toLowerCase();
+          if (WAKE_PATTERNS.some(p => heard.indexOf(p) !== -1)) {
+            onWakeDetected();
+            return;
+          }
+        }
       }
+    } else { // ORDER mode — accumulate final text
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const chunk = event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalTranscript += chunk + " ";
+        else interim += chunk;
+      }
+      setHeard((finalTranscript + " " + interim).trim());
     }
-    // Show live progress in the "You said" box.
-    setHeard((finalTranscript + " " + interim).trim());
   };
 
-  recognition.onerror = function (event) {
-    listening = false;
-    $("micButton").classList.remove("listening");
-    $("micButton").textContent = "🎙️";
-    $("micLabel").textContent = "Tap to speak";
-    console.log("Speech recognition error:", event.error);
-
-    if (event.error === "not-allowed" || event.error === "service-not-allowed") {
-      showError("Microphone permission was denied. Please allow microphone access in Chrome.");
-    } else if (event.error === "no-speech") {
-      setStatus("No speech detected", "");
-    } else {
-      showError("Speech recognition error: " + event.error);
+  recognition.onerror = function (e) {
+    // no-speech / aborted are normal while idling; just keep the loop alive.
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+      showError("Microphone permission denied. Please allow it and reload.");
+      setStatus("Microphone blocked", "error");
+      return;
     }
-    setStatus("Ready", "");
+    // For other errors, the onend handler will restart the loop.
   };
 
   recognition.onend = function () {
-    listening = false;
-    $("micButton").classList.remove("listening");
-    $("micButton").textContent = "🎙️";
-    $("micLabel").textContent = "Tap to speak";
-
-    // Send the FULL accumulated transcript once recognition ends (user tapped
-    // stop, or a long silence). This is what captures multi-item orders.
-    const full = String(finalTranscript || "").trim();
-    if (full) {
-      processUtterance(full);
+    if (mode === "ORDER") {
+      const full = String(finalTranscript || "").trim();
+      finalTranscript = "";
+      if (full) { processUtterance(full); return; }  // handle the order
+      // nothing captured -> go back to wake listening
+      goWake();
+      return;
+    }
+    // WAKE mode ended (Chrome auto-stops periodically) -> restart to keep
+    // continuous listening alive.
+    if (started && mode === "WAKE") {
+      clearTimeout(restartTimer);
+      restartTimer = setTimeout(startRecognitionSafely, 400);
     }
   };
 }
 
-/* =====================================================
-   MICROPHONE BUTTON
-===================================================== */
-function toggleListening() {
-  if (!supportsSpeech) { return; }
+function startRecognitionSafely() {
+  if (!recognition || !started) return;
+  try { recognition.start(); }
+  catch (e) { /* already started; ignore */ }
+}
 
-  if (listening) {
-    try { recognition.stop(); } catch (e) {}
+// Switch to wake-listening mode.
+function goWake() {
+  mode = "WAKE";
+  applyLang();
+  setMic("wake");
+  setStatus('Say "Hey Roots and Ruchi"', "wake");
+  $("micLabel").textContent = 'Listening for "Hey Roots and Ruchi"';
+  try { recognition.stop(); } catch (e) {}   // onend will restart in WAKE mode
+}
+
+// Switch to order-capture mode.
+function goOrder() {
+  mode = "ORDER";
+  finalTranscript = "";
+  applyLang();
+  setMic("order");
+  setStatus("Listening... (speak your order)", "listening");
+  $("micLabel").textContent = "Listening… pause when done";
+  try { recognition.stop(); } catch (e) {}   // restart cleanly in ORDER mode
+  clearTimeout(restartTimer);
+  restartTimer = setTimeout(startRecognitionSafely, 300);
+}
+
+function onWakeDetected() {
+  // Acknowledge and open a listening turn.
+  setHeard("(wake word detected)");
+  setAssistant("Yes! Please tell me your order.");
+  browserSpeak("Yes, please tell me your order.", function () { goOrder(); });
+  // If TTS is unavailable, still open the turn.
+  setTimeout(function () { if (mode !== "ORDER") goOrder(); }, 1500);
+}
+
+/* =====================================================
+   MIC BUTTON  (Start / manual talk)
+===================================================== */
+function onMicTap() {
+  if (!supportsSpeech) return;
+  unlockAudio();
+
+  if (!started) {
+    // First tap: grant mic + start session + begin wake loop.
+    started = true;
+    startSession(function () {
+      goWake();
+      startRecognitionSafely();
+    });
     return;
   }
 
-  showError("");
-  // Tapping the mic is a user gesture — unlock audio so the assistant's reply
-  // (in any language) is allowed to play afterwards.
-  unlockAudio();
-  stopAllAudio();
-
-  // Make sure STT uses the latest chosen language before starting.
-  applyRecognitionLanguage();
-
-  try { recognition.start(); }
-  catch (e) { console.log("Recognition start error:", e); }
+  // Subsequent taps act as a manual "talk now" (skip wake word).
+  goOrder();
 }
 
 /* =====================================================
    NEW ORDER
 ===================================================== */
 function startNewOrder() {
+  unlockAudio();
   sessionId = "";
   currentLanguage = "en-IN";
-  applyRecognitionLanguage();
-  setHeard("");
-  setAssistant("Starting a new order...");
+  setHeard(""); setAssistant("Starting a new order...");
   $("cart").innerHTML = '<div class="empty">Your cart is empty.</div>';
   $("total").textContent = "₹0";
-  startSession();
+  startSession(function () { goWake(); startRecognitionSafely(); });
 }
 
 /* =====================================================
-   INITIALIZE
+   INIT
 ===================================================== */
 window.addEventListener("load", function () {
-  setupSpeechRecognition();
-  startSession();
+  setupRecognition();
+  setStatus("Tap Start to begin", "");
+  $("micLabel").textContent = "Tap to start";
 });
 </script>
 </body>
