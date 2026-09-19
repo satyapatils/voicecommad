@@ -1,0 +1,1112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1.0">
+
+  <title>Roots & Ruchi - Voice Ordering</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f7f4ef;
+      color: #2d241e;
+    }
+
+    .header {
+      background: #5b2c1f;
+      color: white;
+      padding: 22px 18px;
+      text-align: center;
+    }
+
+    .header h1 {
+      margin: 0;
+      font-size: 28px;
+    }
+
+    .header p {
+      margin: 7px 0 0;
+      opacity: 0.9;
+    }
+
+    .container {
+      max-width: 720px;
+      margin: 25px auto;
+      padding: 0 15px;
+    }
+
+    .card {
+      background: white;
+      border-radius: 18px;
+      padding: 22px;
+      margin-bottom: 18px;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.08);
+    }
+
+    .status {
+      text-align: center;
+      font-size: 16px;
+      margin-bottom: 18px;
+      font-weight: bold;
+    }
+
+    .status-dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #888;
+      margin-right: 7px;
+    }
+
+    .status-listening .status-dot {
+      background: #2e9d50;
+    }
+
+    .status-speaking .status-dot {
+      background: #d99000;
+    }
+
+    .status-error .status-dot {
+      background: #d33;
+    }
+
+    .mic-area {
+      text-align: center;
+      padding: 10px 0 20px;
+    }
+
+    #micButton {
+      width: 115px;
+      height: 115px;
+      border-radius: 50%;
+      border: none;
+      background: #5b2c1f;
+      color: white;
+      font-size: 46px;
+      cursor: pointer;
+      box-shadow: 0 7px 20px rgba(91,44,31,0.3);
+    }
+
+    #micButton.listening {
+      background: #a33b25;
+      animation: pulse 1.3s infinite;
+    }
+
+    @keyframes pulse {
+      0% {
+        transform: scale(1);
+      }
+      50% {
+        transform: scale(1.08);
+      }
+      100% {
+        transform: scale(1);
+      }
+    }
+
+    .mic-label {
+      margin-top: 12px;
+      font-size: 16px;
+      color: #666;
+    }
+
+    .section-title {
+      font-weight: bold;
+      font-size: 18px;
+      margin-bottom: 10px;
+    }
+
+    .heard {
+      min-height: 45px;
+      background: #f2eee9;
+      padding: 14px;
+      border-radius: 10px;
+      line-height: 1.5;
+    }
+
+    .assistant {
+      min-height: 45px;
+      background: #fff4df;
+      padding: 14px;
+      border-radius: 10px;
+      line-height: 1.5;
+    }
+
+    .cart-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid #eee;
+    }
+
+    .cart-name {
+      font-weight: bold;
+    }
+
+    .cart-qty {
+      color: #777;
+      font-size: 14px;
+    }
+
+    .total {
+      display: flex;
+      justify-content: space-between;
+      font-size: 21px;
+      font-weight: bold;
+      margin-top: 15px;
+    }
+
+    .buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 15px;
+      flex-wrap: wrap;
+    }
+
+    button.secondary {
+      border: 1px solid #5b2c1f;
+      background: white;
+      color: #5b2c1f;
+      padding: 12px 18px;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+
+    .hint {
+      text-align: center;
+      color: #777;
+      font-size: 13px;
+      margin-top: 12px;
+    }
+
+    .error {
+      color: #c62828;
+      font-size: 14px;
+      margin-top: 10px;
+    }
+
+    .empty {
+      color: #888;
+      padding: 10px 0;
+    }
+
+    @media(max-width:600px) {
+      .header h1 {
+        font-size: 23px;
+      }
+
+      .card {
+        padding: 17px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="header">
+    <h1>🌿 Roots & Ruchi</h1>
+    <p>Voice Ordering Assistant</p>
+  </div>
+
+  <div class="container">
+
+    <!-- STATUS -->
+    <div class="card">
+
+      <div id="status" class="status">
+        <span class="status-dot"></span>
+        <span id="statusText">Starting...</span>
+      </div>
+
+      <div class="mic-area">
+
+        <button id="micButton"
+                onclick="toggleListening()">
+          🎙️
+        </button>
+
+        <div class="mic-label" id="micLabel">
+          Tap to speak
+        </div>
+
+        <div class="hint">
+          Example: "Give me two masala dosa and one coffee"
+        </div>
+
+      </div>
+
+    </div>
+
+
+    <!-- CUSTOMER SPEECH -->
+    <div class="card">
+
+      <div class="section-title">
+        🗣️ You said
+      </div>
+
+      <div id="heard"
+           class="heard">
+        Waiting for your order...
+      </div>
+
+    </div>
+
+
+    <!-- ASSISTANT -->
+    <div class="card">
+
+      <div class="section-title">
+        🤖 Roots & Ruchi
+      </div>
+
+      <div id="assistant"
+           class="assistant">
+        Hello! Welcome to Roots & Ruchi. What would you like to order?
+      </div>
+
+    </div>
+
+
+    <!-- CART -->
+    <div class="card">
+
+      <div class="section-title">
+        🛒 Your Order
+      </div>
+
+      <div id="cart">
+        <div class="empty">
+          Your cart is empty.
+        </div>
+      </div>
+
+      <div class="total">
+        <span>Total</span>
+        <span id="total">₹0</span>
+      </div>
+
+    </div>
+
+
+    <!-- CONTROLS -->
+    <div class="card">
+
+      <div class="buttons">
+
+        <button class="secondary"
+                onclick="startNewOrder()">
+          🔄 New Order
+        </button>
+
+        <button class="secondary"
+                onclick="showCart()">
+          🛒 Refresh Cart
+        </button>
+
+      </div>
+
+      <div id="error"
+           class="error">
+      </div>
+
+    </div>
+
+  </div>
+
+
+<script>
+
+/* =====================================================
+   CONFIGURATION
+===================================================== */
+
+const APPS_SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbwT0MBiq-vS2yI4QQ1TIuyOb3h6xDPFpXIJPBNAyW7vipLcZFGL2KEoKwLww_GnLUgqnw/exec";
+
+
+/* =====================================================
+   APPLICATION STATE
+===================================================== */
+
+let sessionId = "";
+
+let listening = false;
+
+let recognition = null;
+
+let supportsSpeech = false;
+
+
+/* =====================================================
+   UI HELPERS
+===================================================== */
+
+function $(id) {
+  return document.getElementById(id);
+}
+
+
+function setStatus(text, type) {
+
+  $("statusText").textContent = text;
+
+  const status = $("status");
+
+  status.className = "status";
+
+  if (type) {
+    status.classList.add("status-" + type);
+  }
+}
+
+
+function setAssistant(text) {
+
+  $("assistant").textContent =
+    text || "";
+}
+
+
+function setHeard(text) {
+
+  $("heard").textContent =
+    text || "";
+}
+
+
+function showError(text) {
+
+  $("error").textContent =
+    text || "";
+}
+
+
+/* =====================================================
+   JSONP CALL TO APPS SCRIPT
+===================================================== */
+
+function callBackend(action, params, callback) {
+
+  const callbackName =
+    "rootsRuchiCallback_" +
+    Date.now() +
+    "_" +
+    Math.floor(Math.random() * 100000);
+
+  const query = new URLSearchParams();
+
+  query.set("api", "voice");
+  query.set("action", action);
+  query.set("callback", callbackName);
+
+  params = params || {};
+
+  Object.keys(params).forEach(function(key) {
+
+    query.set(
+      key,
+      params[key] == null ? "" : params[key]
+    );
+
+  });
+
+
+  const script =
+    document.createElement("script");
+
+  window[callbackName] =
+    function(response) {
+
+      try {
+
+        callback(null, response);
+
+      } catch (e) {
+
+        callback(e, null);
+
+      }
+
+      delete window[callbackName];
+
+      script.remove();
+
+    };
+
+
+  script.onerror =
+    function() {
+
+      callback(
+        new Error("Unable to connect to Roots & Ruchi backend."),
+        null
+      );
+
+      delete window[callbackName];
+
+      script.remove();
+
+    };
+
+
+  script.src =
+    APPS_SCRIPT_URL +
+    "?" +
+    query.toString();
+
+
+  document.body.appendChild(script);
+}
+
+
+/* =====================================================
+   START SESSION
+===================================================== */
+
+function startSession() {
+
+  setStatus(
+    "Connecting...",
+    ""
+  );
+
+  callBackend(
+    "START",
+    {},
+    function(error, response) {
+
+      if (error) {
+
+        showError(error.message);
+
+        setStatus(
+          "Backend connection failed",
+          "error"
+        );
+
+        return;
+      }
+
+
+      if (!response || response.ok === false) {
+
+        showError(
+          response && response.error
+            ? response.error
+            : "Unable to start session."
+        );
+
+        setStatus(
+          "Backend error",
+          "error"
+        );
+
+        return;
+      }
+
+
+      sessionId =
+        response.sessionId || "";
+
+
+      setStatus(
+        "Ready",
+        ""
+      );
+
+
+      setAssistant(
+        "Hello! Welcome to Roots & Ruchi. What would you like to order?"
+      );
+
+
+      speak(
+        "Hello! Welcome to Roots and Ruchi. What would you like to order?"
+      );
+
+
+      showCart();
+
+    }
+  );
+}
+
+
+/* =====================================================
+   SEND CUSTOMER UTTERANCE
+===================================================== */
+
+function processUtterance(text) {
+
+  text =
+    String(text || "").trim();
+
+
+  if (!text) {
+    return;
+  }
+
+
+  setHeard(text);
+
+  setStatus(
+    "Thinking...",
+    ""
+  );
+
+
+  callBackend(
+    "COMMAND",
+    {
+      sessionId: sessionId,
+      text: text
+    },
+    function(error, response) {
+
+      if (error) {
+
+        showError(error.message);
+
+        setStatus(
+          "Backend error",
+          "error"
+        );
+
+        return;
+      }
+
+
+      if (!response || response.ok === false) {
+
+        showError(
+          response && response.error
+            ? response.error
+            : "Something went wrong."
+        );
+
+        setStatus(
+          "Error",
+          "error"
+        );
+
+        return;
+      }
+
+
+      showError("");
+
+
+      if (response.speak) {
+
+        setAssistant(
+          response.speak
+        );
+
+        speak(
+          response.speak
+        );
+
+      }
+
+
+      renderCart(
+        response.cart
+      );
+
+
+      setStatus(
+        "Ready",
+        ""
+      );
+
+    }
+  );
+}
+
+
+/* =====================================================
+   CART
+===================================================== */
+
+function showCart() {
+
+  if (!sessionId) {
+    return;
+  }
+
+
+  callBackend(
+    "CART",
+    {
+      sessionId: sessionId
+    },
+    function(error, response) {
+
+      if (error) {
+        showError(error.message);
+        return;
+      }
+
+
+      if (!response || response.ok === false) {
+        return;
+      }
+
+
+      renderCart(response);
+
+    }
+  );
+}
+
+
+function renderCart(cart) {
+
+  const container =
+    $("cart");
+
+  container.innerHTML = "";
+
+
+  if (
+    !cart ||
+    !cart.items ||
+    cart.items.length === 0
+  ) {
+
+    container.innerHTML =
+      '<div class="empty">Your cart is empty.</div>';
+
+    $("total").textContent =
+      "₹0";
+
+    return;
+  }
+
+
+  cart.items.forEach(function(item) {
+
+    const row =
+      document.createElement("div");
+
+    row.className =
+      "cart-item";
+
+
+    const left =
+      document.createElement("div");
+
+    left.innerHTML =
+      '<div class="cart-name">' +
+      escapeHtml(item.itemName) +
+      '</div>' +
+      '<div class="cart-qty">' +
+      item.quantity +
+      " × ₹" +
+      item.unitPrice +
+      "</div>";
+
+
+    const right =
+      document.createElement("div");
+
+    right.textContent =
+      "₹" +
+      item.lineTotal;
+
+
+    row.appendChild(left);
+
+    row.appendChild(right);
+
+    container.appendChild(row);
+
+  });
+
+
+  $("total").textContent =
+    "₹" +
+    (cart.total || 0);
+}
+
+
+function escapeHtml(value) {
+
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+
+}
+
+
+/* =====================================================
+   TEXT TO SPEECH
+===================================================== */
+
+function speak(text) {
+
+  if (!text) {
+    return;
+  }
+
+
+  if (
+    !("speechSynthesis" in window)
+  ) {
+    return;
+  }
+
+
+  try {
+
+    window.speechSynthesis.cancel();
+
+
+    const utterance =
+      new SpeechSynthesisUtterance(text);
+
+
+    utterance.lang =
+      "en-IN";
+
+    utterance.rate =
+      1.0;
+
+    utterance.pitch =
+      1.0;
+
+
+    utterance.onstart =
+      function() {
+
+        setStatus(
+          "Speaking...",
+          "speaking"
+        );
+
+      };
+
+
+    utterance.onend =
+      function() {
+
+        if (!listening) {
+
+          setStatus(
+            "Ready",
+            ""
+          );
+
+        }
+
+      };
+
+
+    window.speechSynthesis.speak(
+      utterance
+    );
+
+  } catch (e) {
+
+    console.log(
+      "Speech synthesis error:",
+      e
+    );
+
+  }
+}
+
+
+/* =====================================================
+   SPEECH RECOGNITION
+===================================================== */
+
+function setupSpeechRecognition() {
+
+  const SpeechRecognition =
+    window.SpeechRecognition ||
+    window.webkitSpeechRecognition;
+
+
+  if (!SpeechRecognition) {
+
+    supportsSpeech =
+      false;
+
+    setStatus(
+      "Speech recognition not supported",
+      "error"
+    );
+
+    $("micLabel").textContent =
+      "Please use Google Chrome";
+
+    $("micButton").disabled =
+      true;
+
+    return;
+  }
+
+
+  supportsSpeech =
+    true;
+
+
+  recognition =
+    new SpeechRecognition();
+
+
+  recognition.lang =
+    "en-IN";
+
+
+  recognition.interimResults =
+    false;
+
+
+  recognition.continuous =
+    false;
+
+
+  recognition.maxAlternatives =
+    1;
+
+
+  recognition.onstart =
+    function() {
+
+      listening =
+        true;
+
+
+      $("micButton")
+        .classList
+        .add("listening");
+
+
+      $("micButton")
+        .textContent =
+        "🛑";
+
+
+      $("micLabel")
+        .textContent =
+        "Listening...";
+
+
+      setStatus(
+        "Listening...",
+        "listening"
+      );
+
+    };
+
+
+  recognition.onresult =
+    function(event) {
+
+      const text =
+        event.results[0][0].transcript;
+
+
+      processUtterance(text);
+
+    };
+
+
+  recognition.onerror =
+    function(event) {
+
+      listening =
+        false;
+
+
+      $("micButton")
+        .classList
+        .remove("listening");
+
+
+      $("micButton")
+        .textContent =
+        "🎙️";
+
+
+      $("micLabel")
+        .textContent =
+        "Tap to speak";
+
+
+      console.log(
+        "Speech recognition error:",
+        event.error
+      );
+
+
+      if (
+        event.error === "not-allowed" ||
+        event.error === "service-not-allowed"
+      ) {
+
+        showError(
+          "Microphone permission was denied. Please allow microphone access in Chrome."
+        );
+
+      } else if (
+        event.error === "no-speech"
+      ) {
+
+        setStatus(
+          "No speech detected",
+          ""
+        );
+
+      } else {
+
+        showError(
+          "Speech recognition error: " +
+          event.error
+        );
+
+      }
+
+      setStatus(
+        "Ready",
+        ""
+      );
+
+    };
+
+
+  recognition.onend =
+    function() {
+
+      listening =
+        false;
+
+
+      $("micButton")
+        .classList
+        .remove("listening");
+
+
+      $("micButton")
+        .textContent =
+        "🎙️";
+
+
+      $("micLabel")
+        .textContent =
+        "Tap to speak";
+
+    };
+
+}
+
+
+/* =====================================================
+   MICROPHONE BUTTON
+===================================================== */
+
+function toggleListening() {
+
+  if (!supportsSpeech) {
+    return;
+  }
+
+
+  if (listening) {
+
+    try {
+      recognition.stop();
+    } catch (e) {}
+
+    return;
+  }
+
+
+  showError("");
+
+
+  if (
+    "speechSynthesis" in window
+  ) {
+
+    window.speechSynthesis.cancel();
+
+  }
+
+
+  try {
+
+    recognition.start();
+
+  } catch (e) {
+
+    console.log(
+      "Recognition start error:",
+      e
+    );
+
+  }
+
+}
+
+
+/* =====================================================
+   NEW ORDER
+===================================================== */
+
+function startNewOrder() {
+
+  sessionId = "";
+
+  setHeard("");
+
+  setAssistant(
+    "Starting a new order..."
+  );
+
+  $("cart").innerHTML =
+    '<div class="empty">Your cart is empty.</div>';
+
+  $("total").textContent =
+    "₹0";
+
+  startSession();
+
+}
+
+
+/* =====================================================
+   INITIALIZE
+===================================================== */
+
+window.addEventListener(
+  "load",
+  function() {
+
+    setupSpeechRecognition();
+
+    startSession();
+
+  }
+);
+
+</script>
+
+</body>
+</html>
