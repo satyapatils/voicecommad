@@ -104,6 +104,7 @@ let currentLanguage = "en-IN";   // updated after the customer picks a language
 let currentAudio = null;         // the currently-playing Sarvam audio element
 let audioUnlocked = false;       // becomes true after first user gesture
 let sharedAudio = null;          // one reusable <audio> element (autoplay-safe)
+let finalTranscript = "";        // accumulates final STT chunks for one turn
 
 /* =====================================================
    UI HELPERS
@@ -393,21 +394,34 @@ function setupSpeechRecognition() {
   supportsSpeech = true;
   recognition = new SpeechRecognition();
   recognition.lang = currentLanguage || "en-IN";
-  recognition.interimResults = false;
-  recognition.continuous = false;
+  recognition.interimResults = true;   // see partials, but wait for finals
+  recognition.continuous = true;       // don't stop at the first pause
   recognition.maxAlternatives = 1;
 
   recognition.onstart = function () {
     listening = true;
+    finalTranscript = "";              // reset accumulator for this turn
     $("micButton").classList.add("listening");
     $("micButton").textContent = "🛑";
-    $("micLabel").textContent = "Listening...";
+    $("micLabel").textContent = "Listening... (tap 🛑 when done)";
     setStatus("Listening...", "listening");
   };
 
   recognition.onresult = function (event) {
-    const text = event.results[0][0].transcript;
-    processUtterance(text);
+    // Accumulate ALL final results so a multi-item sentence spoken with pauses
+    // (e.g. "one masala dosa ... one plain dosa") is captured in full instead
+    // of being cut off at the first pause.
+    let interim = "";
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const chunk = event.results[i][0].transcript;
+      if (event.results[i].isFinal) {
+        finalTranscript += chunk + " ";
+      } else {
+        interim += chunk;
+      }
+    }
+    // Show live progress in the "You said" box.
+    setHeard((finalTranscript + " " + interim).trim());
   };
 
   recognition.onerror = function (event) {
@@ -432,6 +446,13 @@ function setupSpeechRecognition() {
     $("micButton").classList.remove("listening");
     $("micButton").textContent = "🎙️";
     $("micLabel").textContent = "Tap to speak";
+
+    // Send the FULL accumulated transcript once recognition ends (user tapped
+    // stop, or a long silence). This is what captures multi-item orders.
+    const full = String(finalTranscript || "").trim();
+    if (full) {
+      processUtterance(full);
+    }
   };
 }
 
