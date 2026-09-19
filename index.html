@@ -102,6 +102,8 @@ let recognition = null;
 let supportsSpeech = false;
 let currentLanguage = "en-IN";   // updated after the customer picks a language
 let currentAudio = null;         // the currently-playing Sarvam audio element
+let audioUnlocked = false;       // becomes true after first user gesture
+let sharedAudio = null;          // one reusable <audio> element (autoplay-safe)
 
 /* =====================================================
    UI HELPERS
@@ -160,6 +162,32 @@ function callBackend(action, params, callback) {
    language. We play that. Browser speechSynthesis is only a fallback for
    English when no audio is provided (it cannot speak Indian languages).
 ===================================================== */
+/**
+ * Unlock audio on a real user gesture (mic tap). We reuse ONE <audio> element
+ * for all playback. Browsers allow a media element to play later (even from a
+ * non-gesture callback) once it has been played once inside a gesture. This is
+ * what makes the Kannada/Hindi audio actually sound instead of being blocked.
+ */
+function unlockAudio() {
+  if (audioUnlocked) { return; }
+  try {
+    if (!sharedAudio) { sharedAudio = new Audio(); }
+    // Tiny silent WAV to satisfy the gesture requirement.
+    sharedAudio.src =
+      "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
+    const p = sharedAudio.play();
+    if (p && p.then) {
+      p.then(function () {
+        sharedAudio.pause();
+        sharedAudio.currentTime = 0;
+      }).catch(function () {});
+    }
+    audioUnlocked = true;
+  } catch (e) {
+    console.log("unlockAudio failed:", e);
+  }
+}
+
 function playResponseAudio(response) {
   // Stop any speech already playing.
   stopAllAudio();
@@ -167,16 +195,23 @@ function playResponseAudio(response) {
   if (response && response.audio) {
     try {
       setStatus("Speaking...", "speaking");
-      currentAudio = new Audio("data:audio/wav;base64," + response.audio);
+
+      // Reuse the unlocked shared element so playback is not autoplay-blocked.
+      if (!sharedAudio) { sharedAudio = new Audio(); }
+      currentAudio = sharedAudio;
+      currentAudio.src = "data:audio/wav;base64," + response.audio;
       currentAudio.onended = function () {
         if (!listening) { setStatus("Ready", ""); }
       };
-      currentAudio.play().catch(function (err) {
-        console.error("Audio play blocked:", err);
-        // Autoplay was blocked (no user gesture). Fall back to browser TTS
-        // for English; other languages will just show text.
-        browserSpeak(response.speakEnglish || response.speak);
-      });
+
+      const p = currentAudio.play();
+      if (p && p.catch) {
+        p.catch(function (err) {
+          console.error("Audio play blocked:", err);
+          // Still blocked (audio never unlocked) -> English browser fallback.
+          browserSpeak(response.speakEnglish || response.speak);
+        });
+      }
       return;
     } catch (e) {
       console.error("playResponseAudio failed:", e);
@@ -204,7 +239,7 @@ function browserSpeak(text) {
 function stopAllAudio() {
   if (currentAudio) {
     try { currentAudio.pause(); currentAudio.currentTime = 0; } catch (e) {}
-    currentAudio = null;
+    // Do NOT null out the shared element — we reuse it for the next clip.
   }
   if ("speechSynthesis" in window) {
     try { window.speechSynthesis.cancel(); } catch (e) {}
@@ -412,7 +447,9 @@ function toggleListening() {
   }
 
   showError("");
-  // Tapping the mic is a user gesture — a good moment to unlock audio.
+  // Tapping the mic is a user gesture — unlock audio so the assistant's reply
+  // (in any language) is allowed to play afterwards.
+  unlockAudio();
   stopAllAudio();
 
   // Make sure STT uses the latest chosen language before starting.
