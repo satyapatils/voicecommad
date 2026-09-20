@@ -352,14 +352,17 @@ async function startListening() {
     listening = false;
     setMicListening(false);
     setStatus("Processing…", "thinking");
-    if (blob.size < 800) {   // basically silence / too short
-      readyForNextTurn("Didn't catch that — tap the mic and speak a bit longer");
+    console.log("Recorded blob:", blob.size, "bytes, type:", type, "chunks:", audioChunks.length);
+    if (blob.size < 400) {   // truly empty (no audio captured at all)
+      showError("No audio was captured (blob " + blob.size + " bytes). Check mic permission/input.");
+      readyForNextTurn("Tap the mic and speak again");
       return;
     }
     transcribeAndSend(blob, type);
   };
 
-  mediaRecorder.start(100);
+  // Collect one chunk per second so we always have data even for short clips.
+  mediaRecorder.start(1000);
   setupSilenceDetection(micStream);
   // Hard stop after 15s so a turn never runs forever.
   maxTimer = setTimeout(function () {
@@ -378,8 +381,11 @@ function cleanupMic() {
   if (audioCtx) { try { audioCtx.close(); } catch (e) {} audioCtx = null; }
 }
 
-// Auto-stop after ~1.5s of silence once the user has started speaking.
+// Auto-stop after ~1.6s of silence, but only AFTER the user has spoken and a
+// minimum recording time has elapsed (so short words aren't cut off and the
+// analyser has time to warm up).
 function setupSilenceDetection(stream) {
+  var recordStart = Date.now();
   try {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const source = audioCtx.createMediaStreamSource(stream);
@@ -394,19 +400,22 @@ function setupSilenceDetection(stream) {
       let sum = 0;
       for (let i = 0; i < data.length; i++) { const x = (data[i] - 128) / 128; sum += x * x; }
       const rms = Math.sqrt(sum / data.length);
-      if (rms > 0.02) {
+      const elapsed = Date.now() - recordStart;
+
+      if (rms > 0.015) {
         speechStarted = true;
         clearTimeout(silenceTimer);
-      } else if (speechStarted) {
-        clearTimeout(silenceTimer);
+        silenceTimer = null;
+      } else if (speechStarted && elapsed > 1200 && !silenceTimer) {
+        // 1.6s of silence after speech -> stop.
         silenceTimer = setTimeout(function () {
           if (mediaRecorder && mediaRecorder.state === "recording") { try { mediaRecorder.stop(); } catch (e) {} }
-        }, 1500);
+        }, 1600);
       }
       requestAnimationFrame(check);
     }
     requestAnimationFrame(check);
-  } catch (e) { /* maxTimer still stops it */ }
+  } catch (e) { /* maxTimer still stops it; user can also tap to send */ }
 }
 
 function blobToBase64(blob) {
