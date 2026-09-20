@@ -179,21 +179,38 @@ function unlockAudio() {
 
 function playResponseAudio(res, onDone) {
   stopAllAudio();
-  if (res && res.audio) {
-    try {
-      setStatus("Speaking...", "speaking");
-      if (!sharedAudio) sharedAudio = new Audio();
-      currentAudio = sharedAudio;
-      currentAudio.src = "data:audio/wav;base64," + res.audio;
-      currentAudio.onended = function () { if (onDone) onDone(); };
-      const p = currentAudio.play();
-      if (p && p.catch) p.catch(function () {
-        browserSpeak(res.speakEnglish || res.speak, onDone);
-      });
-      return;
-    } catch (e) {}
+
+  // If the backend already included audio, play it directly.
+  if (res && res.audio) { playBase64(res.audio, res, onDone); return; }
+
+  // Non-English replies: fetch audio via the lightweight TTS action, but DON'T
+  // block the UI — text/cart already updated. Call onDone quickly so listening
+  // resumes; audio plays when it arrives.
+  if (res && res.needAudio && res.speak) {
+    // Resume the flow promptly; audio will play shortly after.
+    if (onDone) { onDone(); onDone = null; }
+    callBackend("TTS", { lang: res.language || "en-IN", text: res.speak }, function (err, a) {
+      if (!err && a && a.audio) playBase64(a.audio, res, null);
+    });
+    return;
   }
+
+  // English (or no audio needed): use the free, instant browser voice.
   browserSpeak((res && (res.speak || res.speakEnglish)) || "", onDone);
+}
+
+function playBase64(b64, res, onDone) {
+  try {
+    setStatus("Speaking...", "speaking");
+    if (!sharedAudio) sharedAudio = new Audio();
+    currentAudio = sharedAudio;
+    currentAudio.src = "data:audio/wav;base64," + b64;
+    currentAudio.onended = function () { if (onDone) onDone(); };
+    const p = currentAudio.play();
+    if (p && p.catch) p.catch(function () {
+      browserSpeak((res && (res.speakEnglish || res.speak)) || "", onDone);
+    });
+  } catch (e) { if (onDone) onDone(); }
 }
 
 function browserSpeak(text, onDone) {
