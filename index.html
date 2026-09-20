@@ -111,6 +111,7 @@ let recognition = null;
 let supportsSpeech = false;
 let finalTranscript = "";
 let restartTimer = null;
+let onboarded = false;           // true once onboarding (lang/name/phone) done
 
 // Audio
 let currentAudio = null;
@@ -223,12 +224,15 @@ function startSession(onReady) {
     }
     sessionId = res.sessionId || "";
     currentLanguage = res.language || "en-IN";
+    onboarded = (res.onboardState === "ORDERING");
     applyLang();
     setAssistant(res.speak || "");
-    // Speak greeting, then go into wake-listening.
+    // Speak greeting, then LISTEN for the language answer (onboarding needs a
+    // direct answer — the wake word does NOT apply during onboarding).
     playResponseAudio(res, function () {
       showCart();
       if (onReady) onReady();
+      else goOrder();   // capture the onboarding answer (language/name/phone)
     });
   });
 }
@@ -251,12 +255,19 @@ function processUtterance(text) {
     showError("");
     if (res.sessionId) sessionId = res.sessionId;
     if (res.language && res.language !== currentLanguage) { currentLanguage = res.language; applyLang(); }
+    if (res.onboardState) onboarded = (res.onboardState === "ORDERING");
     if (res.speak) setAssistant(res.speak);
     if (res.cart) renderCart(res.cart);
 
-    // After the assistant finishes speaking, listen for the NEXT order turn
-    // directly (conversation continues without needing the wake word again).
-    playResponseAudio(res, function () { goOrder(); });
+    var placed = (res.intent === "ORDER_PLACED");
+
+    // After the assistant finishes speaking:
+    //  - During onboarding OR mid-order: keep listening directly (no wake word).
+    //  - After an order is placed: go idle and wait for the wake word again.
+    playResponseAudio(res, function () {
+      if (placed) { goWake(); }
+      else { goOrder(); }
+    });
   });
 }
 
@@ -409,12 +420,10 @@ function onMicTap() {
   unlockAudio();
 
   if (!started) {
-    // First tap: grant mic + start session + begin wake loop.
+    // First tap: grant mic + start session. Onboarding needs a direct answer,
+    // so after the greeting we LISTEN for the language (no onReady -> goOrder()).
     started = true;
-    startSession(function () {
-      goWake();
-      startRecognitionSafely();
-    });
+    startSession();
     return;
   }
 
@@ -432,7 +441,9 @@ function startNewOrder() {
   setHeard(""); setAssistant("Starting a new order...");
   $("cart").innerHTML = '<div class="empty">Your cart is empty.</div>';
   $("total").textContent = "₹0";
-  startSession(function () { goWake(); startRecognitionSafely(); });
+  onboarded = false;
+  started = true;
+  startSession();   // greeting -> listen for language answer
 }
 
 /* =====================================================
