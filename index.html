@@ -481,7 +481,17 @@ function onMicTap() {
     return;
   }
 
-  // Subsequent taps act as a manual "talk now" (skip wake word).
+  // If we're currently capturing an order, tapping the mic means "I'm done
+  // speaking — submit now." Stop recognition so the transcript is sent
+  // immediately (this is the manual pause/submit the user was missing).
+  if (mode === "ORDER") {
+    clearTimeout(silenceTimer);
+    clearTimeout(restartTimer);
+    try { recognition.stop(); } catch (e) {}   // onend submits finalTranscript
+    return;
+  }
+
+  // Otherwise (idle/wake): start a talk turn now.
   goOrder();
 }
 
