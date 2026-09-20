@@ -1,100 +1,88 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Roots & Ruchi - Voice Ordering</title>
-<style>
-* { box-sizing: border-box; }
-body { margin: 0; font-family: Arial, sans-serif; background: #f7f4ef; color: #2d241e; }
-.header { background: #5b2c1f; color: white; padding: 22px 18px; text-align: center; }
-.header h1 { margin: 0; font-size: 28px; }
-.header p { margin: 7px 0 0; opacity: 0.9; }
-.container { max-width: 720px; margin: 25px auto; padding: 0 15px; }
-.card { background: white; border-radius: 18px; padding: 22px; margin-bottom: 18px; box-shadow: 0 4px 18px rgba(0,0,0,0.08); }
-.status { text-align: center; font-size: 16px; margin-bottom: 18px; font-weight: bold; }
 .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #888; margin-right: 7px; }
 .status-listening .status-dot { background: #2e9d50; }
 .status-speaking .status-dot { background: #d99000; }
+.status-wake .status-dot { background: #2d7dd2; }
 .status-thinking .status-dot { background: #2d7dd2; }
 .status-error .status-dot { background: #d33; }
 .mic-area { text-align: center; padding: 10px 0 20px; }
 #micButton { width: 115px; height: 115px; border-radius: 50%; border: none; background: #5b2c1f; color: white; font-size: 46px; cursor: pointer; box-shadow: 0 7px 20px rgba(91,44,31,0.3); }
 #micButton.listening { background: #a33b25; animation: pulse 1.3s infinite; }
+#micButton.wake { background: #2d7dd2; }
 #micButton:disabled { opacity: 0.5; cursor: not-allowed; }
 @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.08); } 100% { transform: scale(1); } }
 .mic-label { margin-top: 12px; font-size: 16px; color: #666; }
 .section-title { font-weight: bold; font-size: 18px; margin-bottom: 10px; }
-.heard { min-height: 45px; background: #f2eee9; padding: 14px; border-radius: 10px; line-height: 1.5; }
-.assistant { min-height: 45px; background: #fff4df; padding: 14px; border-radius: 10px; line-height: 1.5; }
-.cart-item { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #eee; }
-.cart-name { font-weight: bold; }
-.cart-qty { color: #777; font-size: 14px; }
-.total { display: flex; justify-content: space-between; font-size: 21px; font-weight: bold; margin-top: 15px; }
-.buttons { display: flex; gap: 10px; margin-top: 15px; flex-wrap: wrap; }
-button.secondary { border: 1px solid #5b2c1f; background: white; color: #5b2c1f; padding: 12px 18px; border-radius: 10px; cursor: pointer; }
-.hint { text-align: center; color: #777; font-size: 13px; margin-top: 12px; }
-.error { color: #c62828; font-size: 14px; margin-top: 10px; }
-.empty { color: #888; padding: 10px 0; }
-@media(max-width:600px) { .header h1 { font-size: 23px; } .card { padding: 17px; } }
-</style>
-</head>
-<body>
-<div class="header">
-  <h1>🌿 Roots & Ruchi</h1>
-  <p>Voice Ordering Assistant</p>
-</div>
-
-<div class="container">
-  <div class="card">
-    <div id="status" class="status">
-      <span class="status-dot"></span>
+@@ -49,12 +49,12 @@ <h1>🌿 Roots & Ruchi</h1>
+<div class="card">
+<div id="status" class="status">
+<span class="status-dot"></span>
+      <span id="statusText">Tap Start to begin</span>
       <span id="statusText">Tap the mic to start</span>
-    </div>
-    <div class="mic-area">
-      <button id="micButton" onclick="onMicTap()">🎙️</button>
+</div>
+<div class="mic-area">
+<button id="micButton" onclick="onMicTap()">🎙️</button>
+      <div class="mic-label" id="micLabel">Tap to start</div>
+      <div class="hint">After starting, just say "Hey Roots and Ruchi" to order.</div>
       <div class="mic-label" id="micLabel">Tap to talk</div>
       <div class="hint">Tap the mic, speak, then tap again (or pause) to send.</div>
-    </div>
-  </div>
+</div>
+</div>
 
-  <div class="card">
-    <div class="section-title">🗣️ You said</div>
-    <div id="heard" class="heard">Waiting...</div>
-  </div>
+@@ -65,7 +65,7 @@ <h1>🌿 Roots & Ruchi</h1>
 
-  <div class="card">
-    <div class="section-title">🤖 Roots & Ruchi</div>
+<div class="card">
+<div class="section-title">🤖 Roots & Ruchi</div>
+    <div id="assistant" class="assistant">Tap Start, then say "Hey Roots and Ruchi".</div>
     <div id="assistant" class="assistant">Tap the mic to begin.</div>
-  </div>
+</div>
 
-  <div class="card">
-    <div class="section-title">🛒 Your Order</div>
-    <div id="cart"><div class="empty">Your cart is empty.</div></div>
-    <div class="total"><span>Total</span><span id="total">₹0</span></div>
-  </div>
-
-  <div class="card">
-    <div class="buttons">
-      <button class="secondary" onclick="startNewOrder()">🔄 New Order</button>
+<div class="card">
+@@ -77,68 +77,53 @@ <h1>🌿 Roots & Ruchi</h1>
+<div class="card">
+<div class="buttons">
+<button class="secondary" onclick="startNewOrder()">🔄 New Order</button>
+      <button class="secondary" onclick="showCart()">🛒 Refresh Cart</button>
       <button class="secondary" onclick="refreshCart()">🛒 Refresh Cart</button>
-    </div>
-    <div id="error" class="error"></div>
-  </div>
+</div>
+<div id="error" class="error"></div>
+</div>
 </div>
 
 <script>
 /* =====================================================
+   CONFIGURATION
    CONFIG
 ===================================================== */
 const APPS_SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbwT0MBiq-vS2yI4QQ1TIuyOb3h6xDPFpXIJPBNAyW7vipLcZFGL2KEoKwLww_GnLUgqnw/exec";
+"https://script.google.com/macros/s/AKfycbwT0MBiq-vS2yI4QQ1TIuyOb3h6xDPFpXIJPBNAyW7vipLcZFGL2KEoKwLww_GnLUgqnw/exec";
+
+// Wake phrase variants (tolerant to what the browser hears).
+const WAKE_PATTERNS = [
+  "roots and ruchi", "root and ruchi", "hey roots", "hi roots",
+  "hello roots", "roots ruchi", "hey ruchi", "hi ruchi", "rootsandruchi"
+];
 
 /* =====================================================
-   STATE
+  STATE
 ===================================================== */
 let sessionId = "";
 let currentLanguage = "en-IN";
+let started = false;             // has the user tapped Start once?
+
+// Two modes for the single recognition object:
+//   'WAKE'  -> listening for the wake phrase (idle)
+//   'ORDER' -> capturing a real order/utterance
+let mode = "WAKE";
+let recognition = null;
+let supportsSpeech = false;
+let finalTranscript = "";
+let restartTimer = null;
+let silenceTimer = null;         // ends an ORDER turn after a pause
+let onboarded = false;           // true once onboarding (lang/name/phone) done
+let onboardStep = "ASK_LANGUAGE";// current onboarding step from backend
+
+// Audio
+let currentAudio = null;
 let onboardStep = "ASK_LANGUAGE";
 let started = false;
 let listening = false;
@@ -111,67 +99,82 @@ let recSampleRate = 16000;
 let silenceTimer = null, maxTimer = null, speechStarted = false, recordStartAt = 0;
 
 /* =====================================================
-   UI HELPERS
+  UI HELPERS
 ===================================================== */
 function $(id) { return document.getElementById(id); }
+function setStatus(text, type) {
+  $("statusText").textContent = text;
+  const s = $("status"); s.className = "status";
+  if (type) s.classList.add("status-" + type);
+}
 function setStatus(t, type) { $("statusText").textContent = t; const s = $("status"); s.className = "status"; if (type) s.classList.add("status-" + type); }
 function setAssistant(t) { $("assistant").textContent = t || ""; }
 function setHeard(t) { $("heard").textContent = t || ""; }
 function showError(t) { $("error").textContent = t || ""; }
+function setMic(state) {
 function setMicListening(on) {
-  const b = $("micButton");
+const b = $("micButton");
+  b.classList.remove("listening", "wake");
+  if (state === "order") { b.classList.add("listening"); b.textContent = "🎙️"; }
+  else if (state === "wake") { b.classList.add("wake"); b.textContent = "👂"; }
+  else { b.textContent = "🎙️"; }
   if (on) { b.classList.add("listening"); b.textContent = "🛑"; $("micLabel").textContent = "Listening… tap to send"; }
   else { b.classList.remove("listening"); b.textContent = "🎙️"; $("micLabel").textContent = "Tap to talk"; }
 }
 function setMicEnabled(on) { $("micButton").disabled = !on; }
 
 /* =====================================================
-   JSONP
-===================================================== */
-function callBackend(action, params, cb) {
-  const name = "rrcb_" + Date.now() + "_" + Math.floor(Math.random() * 1e6);
-  const q = new URLSearchParams();
-  q.set("api", "voice"); q.set("action", action); q.set("callback", name);
-  params = params || {};
-  Object.keys(params).forEach(k => q.set(k, params[k] == null ? "" : params[k]));
-  const script = document.createElement("script");
+  JSONP
+@@ -149,15 +134,21 @@ <h1>🌿 Roots & Ruchi</h1>
+q.set("api", "voice"); q.set("action", action); q.set("callback", name);
+params = params || {};
+Object.keys(params).forEach(k => q.set(k, params[k] == null ? "" : params[k]));
+
+const script = document.createElement("script");
   let done = false;
   const t = setTimeout(function () {
     if (done) return; done = true;
     cb(new Error("Request timed out."), null);
     delete window[name]; if (script.parentNode) script.remove();
   }, 20000);
-  window[name] = function (res) {
+window[name] = function (res) {
+    try { cb(null, res); } catch (e) { cb(e, null); }
+    delete window[name]; script.remove();
     if (done) return; done = true; clearTimeout(t);
     cb(null, res); delete window[name]; if (script.parentNode) script.remove();
-  };
-  script.onerror = function () {
+};
+script.onerror = function () {
     if (done) return; done = true; clearTimeout(t);
-    cb(new Error("Unable to connect to backend."), null);
+cb(new Error("Unable to connect to backend."), null);
+    delete window[name]; script.remove();
     delete window[name]; if (script.parentNode) script.remove();
-  };
-  script.src = APPS_SCRIPT_URL + "?" + q.toString();
-  document.body.appendChild(script);
-}
-
-/* =====================================================
-   AUDIO
-===================================================== */
-function unlockAudio() {
-  if (audioUnlocked) return;
-  try {
-    if (!sharedAudio) sharedAudio = new Audio();
-    sharedAudio.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
-    const p = sharedAudio.play();
-    if (p && p.then) p.then(() => { sharedAudio.pause(); sharedAudio.currentTime = 0; }).catch(() => {});
-    audioUnlocked = true;
-  } catch (e) {}
+};
+script.src = APPS_SCRIPT_URL + "?" + q.toString();
+document.body.appendChild(script);
+@@ -176,139 +167,113 @@ <h1>🌿 Roots & Ruchi</h1>
+audioUnlocked = true;
+} catch (e) {}
 }
 function stopAudio() {
   if (sharedAudio) { try { sharedAudio.pause(); sharedAudio.currentTime = 0; } catch (e) {} }
   if ("speechSynthesis" in window) { try { window.speechSynthesis.cancel(); } catch (e) {} }
 }
 
+function playResponseAudio(res, onDone) {
+  stopAllAudio();
+
+  // If the backend already included audio, play it directly.
+  if (res && res.audio) { playBase64(res.audio, res, onDone); return; }
+
+  // Non-English replies: fetch audio via the lightweight TTS action, but DON'T
+  // block the UI — text/cart already updated. Call onDone quickly so listening
+  // resumes; audio plays when it arrives.
+  if (res && res.needAudio && res.speak) {
+    // Resume the flow promptly; audio will play shortly after.
+    if (onDone) { onDone(); onDone = null; }
+    callBackend("TTS", { lang: res.language || "en-IN", text: res.speak }, function (err, a) {
+      if (!err && a && a.audio) playBase64(a.audio, res, null);
+    });
 // Speak the reply, then call onDone (exactly once, always).
 function speakThen(res, onDone) {
   stopAudio();
@@ -195,29 +198,40 @@ function speakThen(res, onDone) {
       u.onend = finish; u.onerror = finish;
       window.speechSynthesis.speak(u);
     } catch (e) { finish(); }
-    return;
-  }
+return;
+}
 
-  // Non-English -> fetch Sarvam audio, play it, then finish. If the TTS fetch
-  // is slow/hangs, we still hand control back after a short guard so the mic
-  // re-enables promptly (audio may finish playing after, which is fine).
-  const guard = setTimeout(finish, 7000);
+  // English (or no audio needed): use the free, instant browser voice.
+  browserSpeak((res && (res.speak || res.speakEnglish)) || "", onDone);
+  // Non-English -> fetch Sarvam audio, play it, then finish. Hard safety timer.
+  const guard = setTimeout(finish, 9000);
   callBackend("TTS", { lang: res.language, text: text }, function (err, a) {
     if (err || !a || !a.audio) { clearTimeout(guard); finish(); return; }
-    // Hand control back as soon as playback STARTS (don't wait for it to end);
-    // this makes the flow feel responsive and never appear stuck on "Speaking".
     try {
       if (!sharedAudio) sharedAudio = new Audio();
-      sharedAudio.onerror = function () {};
+      sharedAudio.onended = function () { clearTimeout(guard); finish(); };
+      sharedAudio.onerror = function () { clearTimeout(guard); finish(); };
       sharedAudio.src = "data:audio/wav;base64," + a.audio;
+      const est = Math.min(15000, Math.max(2500, Math.round(a.audio.length / 16) + 1500));
+      setTimeout(function () { clearTimeout(guard); finish(); }, est);
       const p = sharedAudio.play();
-      if (p && p.catch) p.catch(function () {});
-    } catch (e) {}
-    clearTimeout(guard);
-    finish();
+      if (p && p.catch) p.catch(function () { clearTimeout(guard); finish(); });
+    } catch (e) { clearTimeout(guard); finish(); }
   });
 }
 
+function playBase64(b64, res, onDone) {
+  try {
+    setStatus("Speaking...", "speaking");
+    if (!sharedAudio) sharedAudio = new Audio();
+    currentAudio = sharedAudio;
+    currentAudio.src = "data:audio/wav;base64," + b64;
+    currentAudio.onended = function () { if (onDone) onDone(); };
+    const p = currentAudio.play();
+    if (p && p.catch) p.catch(function () {
+      browserSpeak((res && (res.speakEnglish || res.speak)) || "", onDone);
+    });
+  } catch (e) { if (onDone) onDone(); }
 /* =====================================================
    RESPONSE HANDLING
 ===================================================== */
@@ -229,6 +243,21 @@ function applyResponse(res) {
   if (res.cart) renderCart(res.cart);
 }
 
+function browserSpeak(text, onDone) {
+  if (!text || !("speechSynthesis" in window)) { if (onDone) onDone(); return; }
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "en-IN";
+    u.onstart = function () { setStatus("Speaking...", "speaking"); };
+    u.onend = function () { if (onDone) onDone(); };
+    window.speechSynthesis.speak(u);
+  } catch (e) { if (onDone) onDone(); }
+}
+
+function stopAllAudio() {
+  if (currentAudio) { try { currentAudio.pause(); currentAudio.currentTime = 0; } catch (e) {} }
+  if ("speechSynthesis" in window) { try { window.speechSynthesis.cancel(); } catch (e) {} }
 function readyForNextTurn(label) {
   busy = false;
   setStatus(label || "Your turn — tap the mic", "");
@@ -237,86 +266,141 @@ function readyForNextTurn(label) {
 }
 
 /* =====================================================
-   SESSION
+  SESSION
 ===================================================== */
+function startSession(onReady) {
+  setStatus("Connecting...", "");
 function startSession() {
   busy = true; setMicEnabled(false);
   setStatus("Connecting...", "thinking");
-  callBackend("ONBOARD_START", {}, function (err, res) {
+callBackend("ONBOARD_START", {}, function (err, res) {
+    if (err) { showError(err.message); setStatus("Backend connection failed", "error"); return; }
+    if (!res || res.ok === false) {
+      showError(res && res.error ? res.error : "Unable to start session.");
+      setStatus("Backend error", "error"); return;
+    }
+    sessionId = res.sessionId || "";
+    currentLanguage = res.language || "en-IN";
+    onboardStep = res.onboardState || "ASK_LANGUAGE";
+    onboarded = (res.onboardState === "ORDERING");
+    applyLang();
+    setAssistant(res.speak || "");
+    showCart();
+
+    // Play the greeting audio, THEN start listening for the answer. We do NOT
+    // rely solely on the audio onDone callback (it can fail to fire for the
+    // browser fallback voice). A safety timer guarantees we enter ORDER mode.
+    var entered = false;
+    var enterOrder = function () {
+      if (entered) return;
+      entered = true;
+      if (onReady) onReady(); else goOrder();
+    };
+    playResponseAudio(res, enterOrder);
+    // Fallback: if audio never signals completion, start listening anyway.
+    setTimeout(enterOrder, 4000);
     if (err) { showError(err.message); setStatus("Connection failed", "error"); readyForNextTurn(); return; }
     if (!res || res.ok === false) { showError((res && res.error) || "Unable to start."); setStatus("Error", "error"); readyForNextTurn(); return; }
     showError("");
     applyResponse(res);
     refreshCart();
     speakThen(res, function () { readyForNextTurn("Your turn — tap the mic to answer"); });
-  });
+});
 }
 
 /* =====================================================
+   SEND UTTERANCE (order turn)
    SEND UTTERANCE
 ===================================================== */
+function processUtterance(text) {
 function sendText(text) {
-  text = String(text || "").trim();
+text = String(text || "").trim();
+  if (!text) { goWake(); return; }
+
   if (!text) { readyForNextTurn("Didn't catch that — tap the mic and try again"); return; }
-  setHeard(text);
+setHeard(text);
+  setStatus("Thinking...", "");
   busy = true; setMicEnabled(false);
   setStatus("Thinking...", "thinking");
-  callBackend("COMMAND", { sessionId: sessionId, text: text }, function (err, res) {
+callBackend("COMMAND", { sessionId: sessionId, text: text }, function (err, res) {
+    if (err) { showError(err.message); setStatus("Error", "error"); goWake(); return; }
     if (err) { showError(err.message); setStatus("Error", "error"); readyForNextTurn(); return; }
-    if (!res || res.ok === false) {
-      showError(res && res.error ? res.error + (res.detail ? " — " + res.detail : "") : "Something went wrong.");
+if (!res || res.ok === false) {
+showError(res && res.error ? res.error + (res.detail ? " — " + res.detail : "") : "Something went wrong.");
+      setStatus("Error", "error"); goWake(); return;
       setStatus("Error", "error"); readyForNextTurn(); return;
-    }
-    showError("");
+}
+showError("");
+    if (res.sessionId) sessionId = res.sessionId;
+    if (res.language && res.language !== currentLanguage) { currentLanguage = res.language; }
+    if (res.onboardState) { onboardStep = res.onboardState; onboarded = (res.onboardState === "ORDERING"); }
+    applyLang();
+    if (res.speak) setAssistant(res.speak);
+    if (res.cart) renderCart(res.cart);
+
+    var placed = (res.intent === "ORDER_PLACED");
+
+    // After the assistant finishes speaking:
+    //  - After an order is placed: go idle and wait for the wake word.
+    //  - Otherwise (onboarding or mid-order): keep listening directly.
+    // A safety timer guarantees we resume even if the audio callback never
+    // fires (browser fallback voice sometimes doesn't signal completion).
+    var resumed = false;
+    var resume = function () {
+      if (resumed) return;
+      resumed = true;
+      if (placed) goWake(); else goOrder();
+    };
+    playResponseAudio(res, resume);
+    setTimeout(resume, 6000);
     applyResponse(res);
     speakThen(res, function () { readyForNextTurn(); });
-  });
+});
 }
 
 /* =====================================================
-   CART
+  CART
 ===================================================== */
+function showCart() {
 function refreshCart() {
-  if (!sessionId) return;
-  callBackend("CART", { sessionId: sessionId }, function (err, res) {
-    if (err || !res || res.ok === false) return;
-    renderCart(res);
-  });
-}
-function renderCart(cart) {
-  const c = $("cart"); c.innerHTML = "";
-  if (!cart || !cart.items || cart.items.length === 0) {
-    c.innerHTML = '<div class="empty">Your cart is empty.</div>';
-    $("total").textContent = "₹0"; return;
-  }
-  cart.items.forEach(function (it) {
-    const row = document.createElement("div"); row.className = "cart-item";
-    const left = document.createElement("div");
-    left.innerHTML = '<div class="cart-name">' + esc(it.itemName) + '</div>' +
-      '<div class="cart-qty">' + it.quantity + " × ₹" + it.unitPrice + "</div>";
-    const right = document.createElement("div"); right.textContent = "₹" + it.lineTotal;
-    row.appendChild(left); row.appendChild(right); c.appendChild(row);
-  });
-  $("total").textContent = "₹" + (cart.total || 0);
-}
-function esc(v) {
-  return String(v || "").replace(/&/g, "&amp;").replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+if (!sessionId) return;
+callBackend("CART", { sessionId: sessionId }, function (err, res) {
+if (err || !res || res.ok === false) return;
+@@ -337,203 +302,250 @@ <h1>🌿 Roots & Ruchi</h1>
 }
 
 /* =====================================================
+   SPEECH RECOGNITION — wake word + order capture
    SARVAM SPEECH-TO-TEXT (record -> send audio -> transcript)
    Far more accurate for Kannada/Hindi/Tamil/Telugu than browser STT.
 ===================================================== */
+function applyLang() {
+  if (!recognition) return;
+  // For NAME and PHONE onboarding steps, use English STT — proper names and
+  // digits are recognized far better in en-IN than in a regional model, no
+  // matter which conversation language was chosen. Everything else uses the
+  // chosen language.
+  if (mode !== "ORDER") {
+    recognition.lang = "en-IN";
+  } else if (onboardStep === "ASK_NAME" || onboardStep === "ASK_PHONE") {
+    recognition.lang = "en-IN";
+  } else {
+    recognition.lang = currentLanguage || "en-IN";
 function sttLang() {
   // Names, phone numbers and the initial language choice transcribe best in
   // English/auto; item ordering uses the chosen language.
   if (onboardStep === "ASK_NAME" || onboardStep === "ASK_PHONE" || onboardStep === "ASK_LANGUAGE") {
     return "en-IN";
-  }
+}
   return currentLanguage || "en-IN";
 }
 
+function setupRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    supportsSpeech = false;
+    setStatus("Speech recognition not supported", "error");
+    $("micLabel").textContent = "Please use Google Chrome";
 async function startListening() {
   if (busy || listening) return;
   showError("");
@@ -324,9 +408,49 @@ async function startListening() {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (e) {
     showError("Microphone permission denied. Please allow it and try again.");
-    return;
-  }
+return;
+}
+  supportsSpeech = true;
+  recognition = new SR();
+  recognition.interimResults = true;
+  recognition.continuous = true;
+  recognition.maxAlternatives = 3;
 
+  recognition.onresult = function (event) {
+    if (mode === "WAKE") {
+      // Scan all alternatives of all results for the wake phrase.
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        for (let a = 0; a < event.results[i].length; a++) {
+          const heard = (event.results[i][a].transcript || "").toLowerCase();
+          if (WAKE_PATTERNS.some(p => heard.indexOf(p) !== -1)) {
+            onWakeDetected();
+            return;
+          }
+        }
+      }
+    } else { // ORDER mode — accumulate final text
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const chunk = event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalTranscript += chunk + " ";
+        else interim += chunk;
+      }
+      setHeard((finalTranscript + " " + interim).trim());
+      // Any speech resets the silence countdown; when the user pauses, the
+      // timer fires, stops recognition, and the turn is submitted.
+      armSilenceTimer();
+    }
+  };
+
+  recognition.onerror = function (e) {
+    // no-speech / aborted are normal while idling; just keep the loop alive.
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+      showError("Microphone permission denied. Please allow it and reload.");
+      setStatus("Microphone blocked", "error");
+      return;
+    }
+    // For other errors, the onend handler will restart the loop.
+  };
   pcmChunks = [];
   speechStarted = false;
   recordStartAt = Date.now();
@@ -335,6 +459,16 @@ async function startListening() {
   setStatus("Listening… speak now", "listening");
   setHeard("Listening…");
 
+  recognition.onend = function () {
+    if (mode === "ORDER") {
+      const full = String(finalTranscript || "").trim();
+      finalTranscript = "";
+      clearTimeout(silenceTimer);
+      if (full) {
+        // We have the utterance — process it. Mode stays ORDER; the reply
+        // handler decides what happens next (goOrder / goWake).
+        processUtterance(full);
+        return;
   try {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     recSampleRate = audioCtx.sampleRate;
@@ -365,7 +499,20 @@ async function startListening() {
         clearTimeout(silenceTimer); silenceTimer = null;
       } else if (speechStarted && elapsed > 1200 && !silenceTimer) {
         silenceTimer = setTimeout(function () { if (listening) stopListening(); }, 1500);
-      }
+}
+      // Nothing captured yet -> keep listening in ORDER mode (don't drop to
+      // wake during onboarding/ordering). Restart the recognizer.
+      clearTimeout(restartTimer);
+      restartTimer = setTimeout(startRecognitionSafely, 300);
+      return;
+    }
+    // WAKE mode ended (Chrome auto-stops periodically) -> restart to keep
+    // continuous listening alive.
+    if (started && mode === "WAKE") {
+      clearTimeout(restartTimer);
+      restartTimer = setTimeout(startRecognitionSafely, 400);
+    }
+  };
     };
   } catch (e) {
     console.error("Audio capture setup failed:", e);
@@ -379,6 +526,15 @@ async function startListening() {
   maxTimer = setTimeout(function () { if (listening) stopListening(); }, 15000);
 }
 
+// After the user pauses in ORDER mode, stop recognition so onend fires and the
+// accumulated transcript is submitted. Reset the timer on every result.
+function armSilenceTimer() {
+  clearTimeout(silenceTimer);
+  silenceTimer = setTimeout(function () {
+    if (mode === "ORDER") {
+      try { recognition.stop(); } catch (e) {}
+    }
+  }, 1600); // ~1.6s of silence ends the turn
 function stopListening() {
   if (!listening) return;
   listening = false;
@@ -408,6 +564,10 @@ function stopListening() {
   transcribeAndSend(wavBlob, "audio/wav");
 }
 
+function startRecognitionSafely() {
+  if (!recognition || !started) return;
+  try { recognition.start(); }
+  catch (e) { /* already started; ignore */ }
 function cleanupMic() {
   clearTimeout(silenceTimer); clearTimeout(maxTimer);
   try { if (procNode) { procNode.disconnect(); procNode.onaudioprocess = null; } } catch (e) {}
@@ -418,6 +578,14 @@ function cleanupMic() {
   if (audioCtx) { try { audioCtx.close(); } catch (e) {} audioCtx = null; }
 }
 
+// Switch to wake-listening mode.
+function goWake() {
+  mode = "WAKE";
+  applyLang();
+  setMic("wake");
+  setStatus('Say "Hey Roots and Ruchi"', "wake");
+  $("micLabel").textContent = 'Listening for "Hey Roots and Ruchi"';
+  try { recognition.stop(); } catch (e) {}   // onend will restart in WAKE mode
 // Encode Float32 PCM -> 16-bit mono WAV Blob (what Sarvam accepts).
 function encodeWav(samples, sampleRate) {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
@@ -446,6 +614,21 @@ function encodeWav(samples, sampleRate) {
   return new Blob([view], { type: "audio/wav" });
 }
 
+// Switch to order-capture mode.
+function goOrder() {
+  clearTimeout(restartTimer);
+  clearTimeout(silenceTimer);
+  mode = "ORDER";
+  finalTranscript = "";
+  applyLang();
+  setMic("order");
+  setStatus("Listening... (speak now)", "listening");
+  $("micLabel").textContent = "Listening… pause when done";
+  // Stop any running session, then start fresh in ORDER mode. The onend from
+  // the stop will see mode===ORDER with empty transcript and restart, but we
+  // pre-empt that with our own start below (guarded by try/catch).
+  try { recognition.stop(); } catch (e) {}
+  restartTimer = setTimeout(startRecognitionSafely, 350);
 function blobToBase64(blob) {
   return new Promise(function (resolve, reject) {
     const r = new FileReader();
@@ -459,6 +642,13 @@ function blobToBase64(blob) {
   });
 }
 
+function onWakeDetected() {
+  // Acknowledge and open a listening turn.
+  setHeard("(wake word detected)");
+  setAssistant("Yes! Please tell me your order.");
+  browserSpeak("Yes, please tell me your order.", function () { goOrder(); });
+  // If TTS is unavailable, still open the turn.
+  setTimeout(function () { if (mode !== "ORDER") goOrder(); }, 1500);
 async function transcribeAndSend(blob, mimeType) {
   busy = true; setMicEnabled(false);
   setStatus("Transcribing…", "thinking");
@@ -515,10 +705,33 @@ async function transcribeAndSend(blob, mimeType) {
 }
 
 /* =====================================================
+   MIC BUTTON  (Start / manual talk)
    MIC BUTTON
 ===================================================== */
 function onMicTap() {
-  unlockAudio();
+  if (!supportsSpeech) return;
+unlockAudio();
+
+  if (!started) {
+    // First tap: grant mic + start session. Onboarding needs a direct answer,
+    // so after the greeting we LISTEN for the language (no onReady -> goOrder()).
+    started = true;
+    startSession();
+    return;
+  }
+
+  // If we're currently capturing an order, tapping the mic means "I'm done
+  // speaking — submit now." Stop recognition so the transcript is sent
+  // immediately (this is the manual pause/submit the user was missing).
+  if (mode === "ORDER") {
+    clearTimeout(silenceTimer);
+    clearTimeout(restartTimer);
+    try { recognition.stop(); } catch (e) {}   // onend submits finalTranscript
+    return;
+  }
+
+  // Otherwise (idle/wake): start a talk turn now.
+  goOrder();
   if (!started) { started = true; startSession(); return; }
   if (busy) return;                       // ignore taps while thinking/speaking
   if (listening) { stopListening(); }     // tap again = stop & send
@@ -526,23 +739,31 @@ function onMicTap() {
 }
 
 /* =====================================================
-   NEW ORDER
+  NEW ORDER
 ===================================================== */
 function startNewOrder() {
-  unlockAudio();
+unlockAudio();
+  sessionId = "";
+  currentLanguage = "en-IN";
+  setHeard(""); setAssistant("Starting a new order...");
   stopListening(); cleanupMic();
   sessionId = ""; currentLanguage = "en-IN"; onboardStep = "ASK_LANGUAGE";
   setHeard("Waiting..."); setAssistant("Starting a new order...");
-  $("cart").innerHTML = '<div class="empty">Your cart is empty.</div>';
-  $("total").textContent = "₹0";
-  started = true;
+$("cart").innerHTML = '<div class="empty">Your cart is empty.</div>';
+$("total").textContent = "₹0";
+  onboarded = false;
+started = true;
+  startSession();   // greeting -> listen for language answer
   startSession();
 }
 
 /* =====================================================
-   INIT
+  INIT
 ===================================================== */
 window.addEventListener("load", function () {
+  setupRecognition();
+  setStatus("Tap Start to begin", "");
+  $("micLabel").textContent = "Tap to start";
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !(window.AudioContext || window.webkitAudioContext)) {
     setStatus("Recording not supported — use a modern browser", "error");
     setMicEnabled(false);
@@ -552,4 +773,3 @@ window.addEventListener("load", function () {
 });
 </script>
 </body>
-</html>
