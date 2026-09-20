@@ -102,11 +102,13 @@ let busy = false;                // waiting on backend / speaking
 let sharedAudio = null;
 let audioUnlocked = false;
 
-// Sarvam STT recording state
-let mediaRecorder = null;
-let audioChunks = [];
+// Sarvam STT recording state — we record raw PCM and encode WAV ourselves,
+// because Sarvam rejects webm/opus (MediaRecorder's format).
 let micStream = null;
-let audioCtx = null, analyser = null, silenceTimer = null, maxTimer = null, speechStarted = false;
+let audioCtx = null, sourceNode = null, procNode = null, analyser = null;
+let pcmChunks = [];          // Float32 buffers of raw audio
+let recSampleRate = 16000;
+let silenceTimer = null, maxTimer = null, speechStarted = false, recordStartAt = 0;
 
 /* =====================================================
    UI HELPERS
@@ -322,100 +324,123 @@ async function startListening() {
     return;
   }
 
-  // Pick a supported recording format.
-  let mimeType = "";
-  ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"].forEach(function (t) {
-    if (!mimeType && window.MediaRecorder && MediaRecorder.isTypeSupported(t)) mimeType = t;
-  });
-
-  try {
-    mediaRecorder = new MediaRecorder(micStream, mimeType ? { mimeType: mimeType } : undefined);
-  } catch (e) {
-    mediaRecorder = new MediaRecorder(micStream);
-  }
-
-  audioChunks = [];
+  pcmChunks = [];
   speechStarted = false;
+  recordStartAt = Date.now();
   listening = true;
   setMicListening(true);
   setStatus("Listening… speak now", "listening");
   setHeard("Listening…");
 
-  mediaRecorder.ondataavailable = function (ev) {
-    if (ev.data && ev.data.size > 0) audioChunks.push(ev.data);
-  };
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    recSampleRate = audioCtx.sampleRate;
+    sourceNode = audioCtx.createMediaStreamSource(micStream);
+    procNode = audioCtx.createScriptProcessor(4096, 1, 1);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    const silData = new Uint8Array(analyser.fftSize);
 
-  mediaRecorder.onstop = function () {
-    const type = (mediaRecorder && mediaRecorder.mimeType) || mimeType || "audio/webm";
+    sourceNode.connect(analyser);
+    sourceNode.connect(procNode);
+    procNode.connect(audioCtx.destination); // required for onaudioprocess to fire
+
+    procNode.onaudioprocess = function (ev) {
+      if (!listening) return;
+      const input = ev.inputBuffer.getChannelData(0);
+      pcmChunks.push(new Float32Array(input)); // copy the samples
+
+      // Silence detection for auto-stop.
+      analyser.getByteTimeDomainData(silData);
+      let sum = 0;
+      for (let i = 0; i < silData.length; i++) { const x = (silData[i] - 128) / 128; sum += x * x; }
+      const rms = Math.sqrt(sum / silData.length);
+      const elapsed = Date.now() - recordStartAt;
+
+      if (rms > 0.015) {
+        speechStarted = true;
+        clearTimeout(silenceTimer); silenceTimer = null;
+      } else if (speechStarted && elapsed > 1200 && !silenceTimer) {
+        silenceTimer = setTimeout(function () { if (listening) stopListening(); }, 1500);
+      }
+    };
+  } catch (e) {
+    console.error("Audio capture setup failed:", e);
+    showError("Could not start recording: " + (e && e.message ? e.message : e));
+    listening = false; setMicListening(false);
     cleanupMic();
-    const blob = new Blob(audioChunks, { type: type });
-    listening = false;
-    setMicListening(false);
-    setStatus("Processing…", "thinking");
-    console.log("Recorded blob:", blob.size, "bytes, type:", type, "chunks:", audioChunks.length);
-    if (blob.size < 400) {   // truly empty (no audio captured at all)
-      showError("No audio was captured (blob " + blob.size + " bytes). Check mic permission/input.");
-      readyForNextTurn("Tap the mic and speak again");
-      return;
-    }
-    transcribeAndSend(blob, type);
-  };
+    return;
+  }
 
-  // Collect one chunk per second so we always have data even for short clips.
-  mediaRecorder.start(1000);
-  setupSilenceDetection(micStream);
-  // Hard stop after 15s so a turn never runs forever.
-  maxTimer = setTimeout(function () {
-    if (mediaRecorder && mediaRecorder.state === "recording") { try { mediaRecorder.stop(); } catch (e) {} }
-  }, 15000);
+  // Hard stop after 15s.
+  maxTimer = setTimeout(function () { if (listening) stopListening(); }, 15000);
 }
 
 function stopListening() {
+  if (!listening) return;
+  listening = false;
   clearTimeout(silenceTimer); clearTimeout(maxTimer);
-  if (mediaRecorder && mediaRecorder.state === "recording") { try { mediaRecorder.stop(); } catch (e) {} }
+  setMicListening(false);
+  setStatus("Processing…", "thinking");
+
+  // Flatten PCM, encode WAV, then send.
+  const sampleRate = recSampleRate || 16000;
+  cleanupMic();
+
+  let total = 0;
+  for (let i = 0; i < pcmChunks.length; i++) total += pcmChunks[i].length;
+  console.log("Captured PCM samples:", total, "@", sampleRate, "Hz");
+  if (total < sampleRate * 0.3) { // < 0.3s of audio
+    showError("Too little audio captured. Speak a bit longer.");
+    readyForNextTurn("Tap the mic and speak again");
+    return;
+  }
+
+  const merged = new Float32Array(total);
+  let off = 0;
+  for (let i = 0; i < pcmChunks.length; i++) { merged.set(pcmChunks[i], off); off += pcmChunks[i].length; }
+  pcmChunks = [];
+
+  const wavBlob = encodeWav(merged, sampleRate);
+  transcribeAndSend(wavBlob, "audio/wav");
 }
 
 function cleanupMic() {
   clearTimeout(silenceTimer); clearTimeout(maxTimer);
+  try { if (procNode) { procNode.disconnect(); procNode.onaudioprocess = null; } } catch (e) {}
+  try { if (sourceNode) sourceNode.disconnect(); } catch (e) {}
+  try { if (analyser) analyser.disconnect(); } catch (e) {}
+  procNode = null; sourceNode = null; analyser = null;
   if (micStream) { micStream.getTracks().forEach(function (t) { t.stop(); }); micStream = null; }
   if (audioCtx) { try { audioCtx.close(); } catch (e) {} audioCtx = null; }
 }
 
-// Auto-stop after ~1.6s of silence, but only AFTER the user has spoken and a
-// minimum recording time has elapsed (so short words aren't cut off and the
-// analyser has time to warm up).
-function setupSilenceDetection(stream) {
-  var recordStart = Date.now();
-  try {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const source = audioCtx.createMediaStreamSource(stream);
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 2048;
-    source.connect(analyser);
-    const data = new Uint8Array(analyser.fftSize);
+// Encode Float32 PCM -> 16-bit mono WAV Blob (what Sarvam accepts).
+function encodeWav(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  function wr(off, s) { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); }
 
-    function check() {
-      if (!mediaRecorder || mediaRecorder.state !== "recording") return;
-      analyser.getByteTimeDomainData(data);
-      let sum = 0;
-      for (let i = 0; i < data.length; i++) { const x = (data[i] - 128) / 128; sum += x * x; }
-      const rms = Math.sqrt(sum / data.length);
-      const elapsed = Date.now() - recordStart;
+  wr(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  wr(8, "WAVE");
+  wr(12, "fmt ");
+  view.setUint32(16, 16, true);        // PCM chunk size
+  view.setUint16(20, 1, true);         // PCM format
+  view.setUint16(22, 1, true);         // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true);         // block align
+  view.setUint16(34, 16, true);        // bits per sample
+  wr(36, "data");
+  view.setUint32(40, samples.length * 2, true);
 
-      if (rms > 0.015) {
-        speechStarted = true;
-        clearTimeout(silenceTimer);
-        silenceTimer = null;
-      } else if (speechStarted && elapsed > 1200 && !silenceTimer) {
-        // 1.6s of silence after speech -> stop.
-        silenceTimer = setTimeout(function () {
-          if (mediaRecorder && mediaRecorder.state === "recording") { try { mediaRecorder.stop(); } catch (e) {} }
-        }, 1600);
-      }
-      requestAnimationFrame(check);
-    }
-    requestAnimationFrame(check);
-  } catch (e) { /* maxTimer still stops it; user can also tap to send */ }
+  let off = 44;
+  for (let i = 0; i < samples.length; i++, off += 2) {
+    let s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return new Blob([view], { type: "audio/wav" });
 }
 
 function blobToBase64(blob) {
