@@ -443,18 +443,26 @@ async function transcribeAndSend(blob, mimeType) {
   // a CORS preflight; Apps Script /exec accepts simple cross-origin POSTs.
   // 'redirect: follow' is important: Apps Script 302-redirects to
   // script.googleusercontent.com to serve the response.
+  // Abort if the request hangs (so we never sit on "Transcribing…" forever).
+  const ctrl = new AbortController();
+  const to = setTimeout(function () { ctrl.abort(); }, 25000);
+
   try {
+    console.log("Sending STT POST, audio base64 length:", base64.length);
     const resp = await fetch(APPS_SCRIPT_URL + "?api=voice&action=STT", {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       redirect: "follow",
+      signal: ctrl.signal,
       body: JSON.stringify({ audio: base64, mimeType: mimeType, lang: sttLang() })
     });
+    clearTimeout(to);
+    console.log("STT HTTP status:", resp.status);
     const raw = await resp.text();
+    console.log("STT raw response:", raw.substring(0, 300));
     let data = {};
     try { data = JSON.parse(raw); } catch (pe) {
-      console.error("STT non-JSON response:", raw.substring(0, 300));
-      showError("STT backend returned an unexpected response. Redeploy as a NEW version with access = Anyone.");
+      showError("STT returned non-JSON (deploy as NEW version, access = Anyone).");
       readyForNextTurn("Tap the mic to retry");
       return;
     }
@@ -467,8 +475,13 @@ async function transcribeAndSend(blob, mimeType) {
     showError("");
     sendText(transcript);   // feed into onboarding/order flow
   } catch (e) {
-    console.error("STT request failed:", e);
-    showError("Could not reach STT (CORS/network). Ensure the web app is deployed as 'Anyone'.");
+    clearTimeout(to);
+    console.error("STT request failed:", e && e.name, e && e.message);
+    if (e && e.name === "AbortError") {
+      showError("STT timed out. The POST to Apps Script did not return.");
+    } else {
+      showError("Could not reach STT (CORS/network). Web app must be deployed as 'Anyone'. " + (e && e.message ? e.message : ""));
+    }
     readyForNextTurn("Tap the mic to try again");
   }
 }
