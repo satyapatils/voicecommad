@@ -190,17 +190,25 @@ function playResponseAudio(res, onDone) {
   if (res && res.needAudio && res.speak) {
     setStatus("Speaking...", "speaking");
     var handled = false;
-    var finish = function () { if (handled) return; handled = true; if (onDone) onDone(); };
+    var finish = function () {
+      if (handled) return;
+      handled = true;
+      clearTimeout(ttsGuard);
+      if (onDone) onDone();
+    };
+
+    // HARD fallback: no matter what happens with the TTS request or audio
+    // playback, start listening within 6s so the flow never gets stuck on
+    // "Speaking".
+    var ttsGuard = setTimeout(finish, 6000);
 
     callBackend("TTS", { lang: res.language || "en-IN", text: res.speak }, function (err, a) {
       if (!err && a && a.audio) {
         playBase64(a.audio, res, finish);   // listen after audio ends
       } else {
-        finish();                            // no audio -> just listen
+        finish();                            // no audio -> just listen now
       }
     });
-    // Safety: if TTS is slow/fails, start listening after 5s anyway.
-    setTimeout(finish, 5000);
     return;
   }
 
@@ -209,17 +217,22 @@ function playResponseAudio(res, onDone) {
 }
 
 function playBase64(b64, res, onDone) {
+  var done = false;
+  var finish = function () { if (done) return; done = true; if (onDone) onDone(); };
   try {
     setStatus("Speaking...", "speaking");
     if (!sharedAudio) sharedAudio = new Audio();
     currentAudio = sharedAudio;
+    currentAudio.onended = finish;
+    currentAudio.onerror = function () { finish(); };
     currentAudio.src = "data:audio/wav;base64," + b64;
-    currentAudio.onended = function () { if (onDone) onDone(); };
     const p = currentAudio.play();
-    if (p && p.catch) p.catch(function () {
-      browserSpeak((res && (res.speakEnglish || res.speak)) || "", onDone);
-    });
-  } catch (e) { if (onDone) onDone(); }
+    if (p && p.catch) p.catch(function () { finish(); });
+    // Fallback: if onended never fires, resume after a bounded time based on a
+    // rough audio-length estimate (base64 length / ~16k chars per second) + 2s.
+    var estMs = Math.min(15000, Math.max(2500, Math.round(b64.length / 16) + 2000));
+    setTimeout(finish, estMs);
+  } catch (e) { finish(); }
 }
 
 function browserSpeak(text, onDone) {
