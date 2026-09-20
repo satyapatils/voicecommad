@@ -540,7 +540,7 @@ function startNewOrder() {
    INIT
 ===================================================== */
 window.addEventListener("load", function () {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !(window.AudioContext || window.webkitAudioContext)) {
     setStatus("Recording not supported — use a modern browser", "error");
     setMicEnabled(false);
     return;
