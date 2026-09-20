@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STT Debug</title>
+<style>
+body { font-family: Arial, sans-serif; max-width: 760px; margin: 30px auto; padding: 16px; }
+button { font-size: 18px; padding: 14px 20px; border-radius: 10px; border: none; background: #5b2c1f; color: #fff; cursor: pointer; }
+button:disabled { opacity: .5; }
+pre { background: #f2eee9; padding: 14px; border-radius: 10px; white-space: pre-wrap; word-break: break-all; font-size: 13px; min-height: 200px; }
+h2 { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<h2>Roots &amp; Ruchi — STT Debug</h2>
+<p>Tap <b>Record</b>, say a word (e.g. "Kannada"), tap <b>Stop</b>. Everything is logged below.</p>
+<button id="rec" onclick="startRec()">🎙️ Record</button>
+<button id="stop" onclick="stopRec()" disabled>⏹ Stop</button>
+<pre id="log">Ready.
+</pre>
+
+<script>
+var APPS_SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbwT0MBiq-vS2yI4QQ1TIuyOb3h6xDPFpXIJPBNAyW7vipLcZFGL2KEoKwLww_GnLUgqnw/exec";
+
+var micStream=null, audioCtx=null, srcNode=null, procNode=null, pcm=[], rate=16000, recording=false;
+
+function log(m){ var el=document.getElementById("log"); el.textContent += "\n" + m; console.log(m); }
+
+async function startRec(){
+  document.getElementById("log").textContent = "Starting…";
+  try { micStream = await navigator.mediaDevices.getUserMedia({audio:true}); }
+  catch(e){ log("MIC ERROR: " + e.message); return; }
+  pcm=[]; recording=true;
+  document.getElementById("rec").disabled=true;
+  document.getElementById("stop").disabled=false;
+  audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  rate = audioCtx.sampleRate;
+  srcNode = audioCtx.createMediaStreamSource(micStream);
+  procNode = audioCtx.createScriptProcessor(4096,1,1);
+  srcNode.connect(procNode); procNode.connect(audioCtx.destination);
+  procNode.onaudioprocess = function(ev){ if(recording) pcm.push(new Float32Array(ev.inputBuffer.getChannelData(0))); };
+  log("Recording… speak now, then tap Stop. sampleRate=" + rate);
+}
+
+function stopRec(){
+  recording=false;
+  document.getElementById("rec").disabled=false;
+  document.getElementById("stop").disabled=true;
+  try{ procNode.disconnect(); srcNode.disconnect(); }catch(e){}
+  if(micStream) micStream.getTracks().forEach(function(t){t.stop();});
+  if(audioCtx) try{audioCtx.close();}catch(e){}
+
+  var total=0; for(var i=0;i<pcm.length;i++) total+=pcm[i].length;
+  log("Captured PCM samples: " + total + " (" + (total/rate).toFixed(2) + " sec)");
+  if(total < 1000){ log("TOO SHORT — barely any audio captured."); return; }
+
+  var merged=new Float32Array(total), off=0;
+  for(var j=0;j<pcm.length;j++){ merged.set(pcm[j],off); off+=pcm[j].length; }
+  var wav = encodeWav(merged, rate);
+  log("WAV blob size: " + wav.size + " bytes");
+  send(wav);
+}
+
+function encodeWav(samples, sampleRate){
+  var buf=new ArrayBuffer(44+samples.length*2), v=new DataView(buf);
+  function wr(o,s){for(var i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));}
+  wr(0,"RIFF"); v.setUint32(4,36+samples.length*2,true); wr(8,"WAVE"); wr(12,"fmt ");
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,sampleRate,true); v.setUint32(28,sampleRate*2,true);
+  v.setUint16(32,2,true); v.setUint16(34,16,true); wr(36,"data");
+  v.setUint32(40,samples.length*2,true);
+  var off=44; for(var i=0;i<samples.length;i++,off+=2){ var s=Math.max(-1,Math.min(1,samples[i])); v.setInt16(off,s<0?s*0x8000:s*0x7FFF,true); }
+  return new Blob([v],{type:"audio/wav"});
+}
+
+function b64(blob){ return new Promise(function(res,rej){ var r=new FileReader(); r.onloadend=function(){ var s=String(r.result||""); var c=s.indexOf(","); res(c>=0?s.substring(c+1):s); }; r.onerror=rej; r.readAsDataURL(blob); }); }
+
+async function send(wav){
+  var base64 = await b64(wav);
+  var token = "dbg_" + Date.now();
+  log("Base64 length: " + base64.length + " | token: " + token);
+
+  log("STEP 1: POST audio (no-cors)…");
+  try{
+    await fetch(APPS_SCRIPT_URL + "?api=voice&action=STT&token=" + token, {
+      method:"POST", mode:"no-cors",
+      headers:{"Content-Type":"text/plain;charset=utf-8"},
+      body: JSON.stringify({audio:base64, mimeType:"audio/wav", lang:"unknown", token:token})
+    });
+    log("POST sent (no-cors, response not readable — expected).");
+  }catch(e){ log("POST error: " + e.message); }
+
+  log("STEP 2: poll STT_RESULT via JSONP…");
+  var attempts=0;
+  (function poll(){
+    attempts++;
+    var name="cb_"+Date.now()+"_"+Math.floor(Math.random()*1e6);
+    var s=document.createElement("script");
+    var t=setTimeout(function(){ delete window[name]; if(s.parentNode)s.remove(); log("poll "+attempts+": (timeout)"); next(); },8000);
+    window[name]=function(r){ clearTimeout(t); delete window[name]; if(s.parentNode)s.remove();
+      log("poll "+attempts+": " + JSON.stringify(r));
+      if(r && r.ready){
+        log("=== RESULT ===");
+        log("transcript: [" + (r.transcript||"") + "]");
+        log("languageCode: " + (r.languageCode||""));
+        log("error: " + (r.error||"(none)"));
+        return;
+      }
+      next();
+    };
+    function next(){ if(attempts>=15){ log("Gave up after "+attempts+" polls."); return; } setTimeout(poll,1200); }
+    s.onerror=function(){ clearTimeout(t); delete window[name]; if(s.parentNode)s.remove(); log("poll "+attempts+": (script error)"); next(); };
+    s.src = APPS_SCRIPT_URL + "?api=voice&action=STT_RESULT&token=" + token + "&callback=" + name;
+    document.body.appendChild(s);
+  })();
+}
+</script>
+</body>
+</html>
