@@ -198,20 +198,23 @@ function speakThen(res, onDone) {
     return;
   }
 
-  // Non-English -> fetch Sarvam audio, play it, then finish. Hard safety timer.
-  const guard = setTimeout(finish, 9000);
+  // Non-English -> fetch Sarvam audio, play it, then finish. If the TTS fetch
+  // is slow/hangs, we still hand control back after a short guard so the mic
+  // re-enables promptly (audio may finish playing after, which is fine).
+  const guard = setTimeout(finish, 7000);
   callBackend("TTS", { lang: res.language, text: text }, function (err, a) {
     if (err || !a || !a.audio) { clearTimeout(guard); finish(); return; }
+    // Hand control back as soon as playback STARTS (don't wait for it to end);
+    // this makes the flow feel responsive and never appear stuck on "Speaking".
     try {
       if (!sharedAudio) sharedAudio = new Audio();
-      sharedAudio.onended = function () { clearTimeout(guard); finish(); };
-      sharedAudio.onerror = function () { clearTimeout(guard); finish(); };
+      sharedAudio.onerror = function () {};
       sharedAudio.src = "data:audio/wav;base64," + a.audio;
-      const est = Math.min(15000, Math.max(2500, Math.round(a.audio.length / 16) + 1500));
-      setTimeout(function () { clearTimeout(guard); finish(); }, est);
       const p = sharedAudio.play();
-      if (p && p.catch) p.catch(function () { clearTimeout(guard); finish(); });
-    } catch (e) { clearTimeout(guard); finish(); }
+      if (p && p.catch) p.catch(function () {});
+    } catch (e) {}
+    clearTimeout(guard);
+    finish();
   });
 }
 
