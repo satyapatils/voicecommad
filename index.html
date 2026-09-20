@@ -111,6 +111,7 @@ let recognition = null;
 let supportsSpeech = false;
 let finalTranscript = "";
 let restartTimer = null;
+let silenceTimer = null;         // ends an ORDER turn after a pause
 let onboarded = false;           // true once onboarding (lang/name/phone) done
 
 // Audio
@@ -343,6 +344,9 @@ function setupRecognition() {
         else interim += chunk;
       }
       setHeard((finalTranscript + " " + interim).trim());
+      // Any speech resets the silence countdown; when the user pauses, the
+      // timer fires, stops recognition, and the turn is submitted.
+      armSilenceTimer();
     }
   };
 
@@ -360,9 +364,17 @@ function setupRecognition() {
     if (mode === "ORDER") {
       const full = String(finalTranscript || "").trim();
       finalTranscript = "";
-      if (full) { processUtterance(full); return; }  // handle the order
-      // nothing captured -> go back to wake listening
-      goWake();
+      clearTimeout(silenceTimer);
+      if (full) {
+        // We have the utterance — process it. Mode stays ORDER; the reply
+        // handler decides what happens next (goOrder / goWake).
+        processUtterance(full);
+        return;
+      }
+      // Nothing captured yet -> keep listening in ORDER mode (don't drop to
+      // wake during onboarding/ordering). Restart the recognizer.
+      clearTimeout(restartTimer);
+      restartTimer = setTimeout(startRecognitionSafely, 300);
       return;
     }
     // WAKE mode ended (Chrome auto-stops periodically) -> restart to keep
@@ -372,6 +384,17 @@ function setupRecognition() {
       restartTimer = setTimeout(startRecognitionSafely, 400);
     }
   };
+}
+
+// After the user pauses in ORDER mode, stop recognition so onend fires and the
+// accumulated transcript is submitted. Reset the timer on every result.
+function armSilenceTimer() {
+  clearTimeout(silenceTimer);
+  silenceTimer = setTimeout(function () {
+    if (mode === "ORDER") {
+      try { recognition.stop(); } catch (e) {}
+    }
+  }, 1600); // ~1.6s of silence ends the turn
 }
 
 function startRecognitionSafely() {
@@ -392,15 +415,19 @@ function goWake() {
 
 // Switch to order-capture mode.
 function goOrder() {
+  clearTimeout(restartTimer);
+  clearTimeout(silenceTimer);
   mode = "ORDER";
   finalTranscript = "";
   applyLang();
   setMic("order");
-  setStatus("Listening... (speak your order)", "listening");
+  setStatus("Listening... (speak now)", "listening");
   $("micLabel").textContent = "Listening… pause when done";
-  try { recognition.stop(); } catch (e) {}   // restart cleanly in ORDER mode
-  clearTimeout(restartTimer);
-  restartTimer = setTimeout(startRecognitionSafely, 300);
+  // Stop any running session, then start fresh in ORDER mode. The onend from
+  // the stop will see mode===ORDER with empty transcript and restart, but we
+  // pre-empt that with our own start below (guarded by try/catch).
+  try { recognition.stop(); } catch (e) {}
+  restartTimer = setTimeout(startRecognitionSafely, 350);
 }
 
 function onWakeDetected() {
