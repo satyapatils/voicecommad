@@ -99,12 +99,14 @@ let onboardStep = "ASK_LANGUAGE";
 let started = false;
 let listening = false;
 let busy = false;                // waiting on backend / speaking
-let recognition = null;
-let supportsSpeech = false;
-let finalTranscript = "";
-let silenceTimer = null;
 let sharedAudio = null;
 let audioUnlocked = false;
+
+// Sarvam STT recording state
+let mediaRecorder = null;
+let audioChunks = [];
+let micStream = null;
+let audioCtx = null, analyser = null, silenceTimer = null, maxTimer = null, speechStarted = false;
 
 /* =====================================================
    UI HELPERS
@@ -298,89 +300,155 @@ function esc(v) {
 }
 
 /* =====================================================
-   SPEECH RECOGNITION (tap-to-talk, single mode)
+   SARVAM SPEECH-TO-TEXT (record -> send audio -> transcript)
+   Far more accurate for Kannada/Hindi/Tamil/Telugu than browser STT.
 ===================================================== */
 function sttLang() {
-  // Names and phone numbers transcribe better in English.
+  // Names, phone numbers and the initial language choice transcribe best in
+  // English/auto; item ordering uses the chosen language.
   if (onboardStep === "ASK_NAME" || onboardStep === "ASK_PHONE" || onboardStep === "ASK_LANGUAGE") {
     return "en-IN";
   }
   return currentLanguage || "en-IN";
 }
 
-function setupRecognition() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) {
-    supportsSpeech = false;
-    setStatus("Speech not supported — use Chrome", "error");
-    $("micLabel").textContent = "Use Google Chrome";
-    setMicEnabled(false);
+async function startListening() {
+  if (busy || listening) return;
+  showError("");
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    showError("Microphone permission denied. Please allow it and try again.");
     return;
   }
-  supportsSpeech = true;
-  recognition = new SR();
-  recognition.interimResults = true;
-  recognition.continuous = true;
-  recognition.maxAlternatives = 1;
 
-  recognition.onresult = function (event) {
-    let interim = "";
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const chunk = event.results[i][0].transcript;
-      if (event.results[i].isFinal) finalTranscript += chunk + " ";
-      else interim += chunk;
-    }
-    setHeard((finalTranscript + " " + interim).trim() || "Listening…");
-    // Reset silence countdown on every bit of speech.
-    clearTimeout(silenceTimer);
-    silenceTimer = setTimeout(function () {
-      if (listening) { try { recognition.stop(); } catch (e) {} }
-    }, 1800);
-  };
+  // Pick a supported recording format.
+  let mimeType = "";
+  ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"].forEach(function (t) {
+    if (!mimeType && window.MediaRecorder && MediaRecorder.isTypeSupported(t)) mimeType = t;
+  });
 
-  recognition.onerror = function (e) {
-    if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-      showError("Microphone permission denied. Allow it and reload.");
-    } else if (e.error === "no-speech") {
-      // ignore — handled on end
-    }
-  };
-
-  recognition.onend = function () {
-    listening = false;
-    clearTimeout(silenceTimer);
-    const full = String(finalTranscript || "").trim();
-    finalTranscript = "";
-    setMicListening(false);
-    if (full) {
-      sendText(full);
-    } else {
-      readyForNextTurn("Didn't catch that — tap the mic and try again");
-    }
-  };
-}
-
-function startListening() {
-  if (!supportsSpeech || busy || listening) return;
-  showError("");
-  finalTranscript = "";
-  setHeard("Listening…");
-  try { recognition.lang = sttLang(); } catch (e) {}
   try {
-    recognition.start();
-    listening = true;
-    setMicListening(true);
-    setStatus("Listening… speak now", "listening");
+    mediaRecorder = new MediaRecorder(micStream, mimeType ? { mimeType: mimeType } : undefined);
   } catch (e) {
-    // Occasionally start() throws if a previous session hasn't fully ended.
-    setTimeout(function () { try { recognition.start(); listening = true; setMicListening(true); } catch (e2) {} }, 300);
+    mediaRecorder = new MediaRecorder(micStream);
   }
+
+  audioChunks = [];
+  speechStarted = false;
+  listening = true;
+  setMicListening(true);
+  setStatus("Listening… speak now", "listening");
+  setHeard("Listening…");
+
+  mediaRecorder.ondataavailable = function (ev) {
+    if (ev.data && ev.data.size > 0) audioChunks.push(ev.data);
+  };
+
+  mediaRecorder.onstop = function () {
+    cleanupMic();
+    const type = (mediaRecorder && mediaRecorder.mimeType) || mimeType || "audio/webm";
+    const blob = new Blob(audioChunks, { type: type });
+    listening = false;
+    setMicListening(false);
+    if (blob.size < 1200) {   // basically silence
+      readyForNextTurn("Didn't catch that — tap the mic and try again");
+      return;
+    }
+    transcribeAndSend(blob, type);
+  };
+
+  mediaRecorder.start(100);
+  setupSilenceDetection(micStream);
+  // Hard stop after 15s so a turn never runs forever.
+  maxTimer = setTimeout(function () {
+    if (mediaRecorder && mediaRecorder.state === "recording") { try { mediaRecorder.stop(); } catch (e) {} }
+  }, 15000);
 }
 
 function stopListening() {
-  if (!listening) return;
-  clearTimeout(silenceTimer);
-  try { recognition.stop(); } catch (e) {}  // onend will submit the transcript
+  clearTimeout(silenceTimer); clearTimeout(maxTimer);
+  if (mediaRecorder && mediaRecorder.state === "recording") { try { mediaRecorder.stop(); } catch (e) {} }
+}
+
+function cleanupMic() {
+  clearTimeout(silenceTimer); clearTimeout(maxTimer);
+  if (micStream) { micStream.getTracks().forEach(function (t) { t.stop(); }); micStream = null; }
+  if (audioCtx) { try { audioCtx.close(); } catch (e) {} audioCtx = null; }
+}
+
+// Auto-stop after ~1.5s of silence once the user has started speaking.
+function setupSilenceDetection(stream) {
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.fftSize);
+
+    function check() {
+      if (!mediaRecorder || mediaRecorder.state !== "recording") return;
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) { const x = (data[i] - 128) / 128; sum += x * x; }
+      const rms = Math.sqrt(sum / data.length);
+      if (rms > 0.02) {
+        speechStarted = true;
+        clearTimeout(silenceTimer);
+      } else if (speechStarted) {
+        clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(function () {
+          if (mediaRecorder && mediaRecorder.state === "recording") { try { mediaRecorder.stop(); } catch (e) {} }
+        }, 1500);
+      }
+      requestAnimationFrame(check);
+    }
+    requestAnimationFrame(check);
+  } catch (e) { /* maxTimer still stops it */ }
+}
+
+function blobToBase64(blob) {
+  return new Promise(function (resolve, reject) {
+    const r = new FileReader();
+    r.onloadend = function () {
+      const s = String(r.result || "");
+      const c = s.indexOf(",");
+      resolve(c >= 0 ? s.substring(c + 1) : s);
+    };
+    r.onerror = reject;
+    r.readAsDataURL(blob);
+  });
+}
+
+async function transcribeAndSend(blob, mimeType) {
+  busy = true; setMicEnabled(false);
+  setStatus("Transcribing…", "thinking");
+  let base64;
+  try { base64 = await blobToBase64(blob); }
+  catch (e) { readyForNextTurn("Could not read audio — tap the mic to retry"); return; }
+
+  // Audio is large -> POST (JSONP GET can't carry it). Apps Script web app
+  // (deployed as "Anyone") returns CORS-open JSON for POST.
+  try {
+    const resp = await fetch(APPS_SCRIPT_URL + "?api=voice&action=STT", {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" }, // avoids CORS preflight
+      body: JSON.stringify({ audio: base64, mimeType: mimeType, lang: sttLang() })
+    });
+    const data = await resp.json();
+    const transcript = (data && data.transcript ? String(data.transcript) : "").trim();
+    if (!transcript) {
+      if (data && data.error) console.warn("STT error:", data.error);
+      readyForNextTurn("Didn't catch that — tap the mic and try again");
+      return;
+    }
+    // Feed the transcript into the existing onboarding/order flow.
+    sendText(transcript);
+  } catch (e) {
+    console.error("STT request failed:", e);
+    readyForNextTurn("Network issue — tap the mic to try again");
+  }
 }
 
 /* =====================================================
@@ -388,16 +456,10 @@ function stopListening() {
 ===================================================== */
 function onMicTap() {
   unlockAudio();
-
-  if (!started) {
-    started = true;
-    startSession();     // greeting -> "your turn, tap the mic"
-    return;
-  }
-  if (busy) return;     // ignore taps while thinking/speaking
-
-  if (listening) { stopListening(); }  // tap again = send
-  else { startListening(); }           // tap = start talking
+  if (!started) { started = true; startSession(); return; }
+  if (busy) return;                       // ignore taps while thinking/speaking
+  if (listening) { stopListening(); }     // tap again = stop & send
+  else { startListening(); }              // tap = start talking
 }
 
 /* =====================================================
@@ -405,7 +467,7 @@ function onMicTap() {
 ===================================================== */
 function startNewOrder() {
   unlockAudio();
-  if (listening) { try { recognition.stop(); } catch (e) {} }
+  stopListening(); cleanupMic();
   sessionId = ""; currentLanguage = "en-IN"; onboardStep = "ASK_LANGUAGE";
   setHeard("Waiting..."); setAssistant("Starting a new order...");
   $("cart").innerHTML = '<div class="empty">Your cart is empty.</div>';
@@ -418,7 +480,11 @@ function startNewOrder() {
    INIT
 ===================================================== */
 window.addEventListener("load", function () {
-  setupRecognition();
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+    setStatus("Recording not supported — use a modern browser", "error");
+    setMicEnabled(false);
+    return;
+  }
   setStatus("Tap the mic to start", "");
 });
 </script>
