@@ -228,13 +228,20 @@ function startSession(onReady) {
     onboarded = (res.onboardState === "ORDERING");
     applyLang();
     setAssistant(res.speak || "");
-    // Speak greeting, then LISTEN for the language answer (onboarding needs a
-    // direct answer — the wake word does NOT apply during onboarding).
-    playResponseAudio(res, function () {
-      showCart();
-      if (onReady) onReady();
-      else goOrder();   // capture the onboarding answer (language/name/phone)
-    });
+    showCart();
+
+    // Play the greeting audio, THEN start listening for the answer. We do NOT
+    // rely solely on the audio onDone callback (it can fail to fire for the
+    // browser fallback voice). A safety timer guarantees we enter ORDER mode.
+    var entered = false;
+    var enterOrder = function () {
+      if (entered) return;
+      entered = true;
+      if (onReady) onReady(); else goOrder();
+    };
+    playResponseAudio(res, enterOrder);
+    // Fallback: if audio never signals completion, start listening anyway.
+    setTimeout(enterOrder, 4000);
   });
 }
 
@@ -263,12 +270,18 @@ function processUtterance(text) {
     var placed = (res.intent === "ORDER_PLACED");
 
     // After the assistant finishes speaking:
-    //  - During onboarding OR mid-order: keep listening directly (no wake word).
-    //  - After an order is placed: go idle and wait for the wake word again.
-    playResponseAudio(res, function () {
-      if (placed) { goWake(); }
-      else { goOrder(); }
-    });
+    //  - After an order is placed: go idle and wait for the wake word.
+    //  - Otherwise (onboarding or mid-order): keep listening directly.
+    // A safety timer guarantees we resume even if the audio callback never
+    // fires (browser fallback voice sometimes doesn't signal completion).
+    var resumed = false;
+    var resume = function () {
+      if (resumed) return;
+      resumed = true;
+      if (placed) goWake(); else goOrder();
+    };
+    playResponseAudio(res, resume);
+    setTimeout(resume, 6000);
   });
 }
 
