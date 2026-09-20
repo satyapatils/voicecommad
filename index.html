@@ -113,6 +113,7 @@ let finalTranscript = "";
 let restartTimer = null;
 let silenceTimer = null;         // ends an ORDER turn after a pause
 let onboarded = false;           // true once onboarding (lang/name/phone) done
+let onboardStep = "ASK_LANGUAGE";// current onboarding step from backend
 
 // Audio
 let currentAudio = null;
@@ -225,6 +226,7 @@ function startSession(onReady) {
     }
     sessionId = res.sessionId || "";
     currentLanguage = res.language || "en-IN";
+    onboardStep = res.onboardState || "ASK_LANGUAGE";
     onboarded = (res.onboardState === "ORDERING");
     applyLang();
     setAssistant(res.speak || "");
@@ -262,8 +264,9 @@ function processUtterance(text) {
     }
     showError("");
     if (res.sessionId) sessionId = res.sessionId;
-    if (res.language && res.language !== currentLanguage) { currentLanguage = res.language; applyLang(); }
-    if (res.onboardState) onboarded = (res.onboardState === "ORDERING");
+    if (res.language && res.language !== currentLanguage) { currentLanguage = res.language; }
+    if (res.onboardState) { onboardStep = res.onboardState; onboarded = (res.onboardState === "ORDERING"); }
+    applyLang();
     if (res.speak) setAssistant(res.speak);
     if (res.cart) renderCart(res.cart);
 
@@ -320,7 +323,18 @@ function esc(v) {
    SPEECH RECOGNITION — wake word + order capture
 ===================================================== */
 function applyLang() {
-  if (recognition) recognition.lang = (mode === "ORDER") ? (currentLanguage || "en-IN") : "en-IN";
+  if (!recognition) return;
+  // For NAME and PHONE onboarding steps, use English STT — proper names and
+  // digits are recognized far better in en-IN than in a regional model, no
+  // matter which conversation language was chosen. Everything else uses the
+  // chosen language.
+  if (mode !== "ORDER") {
+    recognition.lang = "en-IN";
+  } else if (onboardStep === "ASK_NAME" || onboardStep === "ASK_PHONE") {
+    recognition.lang = "en-IN";
+  } else {
+    recognition.lang = currentLanguage || "en-IN";
+  }
 }
 
 function setupRecognition() {
