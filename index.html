@@ -346,13 +346,14 @@ async function startListening() {
   };
 
   mediaRecorder.onstop = function () {
-    cleanupMic();
     const type = (mediaRecorder && mediaRecorder.mimeType) || mimeType || "audio/webm";
+    cleanupMic();
     const blob = new Blob(audioChunks, { type: type });
     listening = false;
     setMicListening(false);
-    if (blob.size < 1200) {   // basically silence
-      readyForNextTurn("Didn't catch that — tap the mic and try again");
+    setStatus("Processing…", "thinking");
+    if (blob.size < 800) {   // basically silence / too short
+      readyForNextTurn("Didn't catch that — tap the mic and speak a bit longer");
       return;
     }
     transcribeAndSend(blob, type);
@@ -424,30 +425,42 @@ function blobToBase64(blob) {
 async function transcribeAndSend(blob, mimeType) {
   busy = true; setMicEnabled(false);
   setStatus("Transcribing…", "thinking");
+  setHeard("Transcribing your speech…");
   let base64;
   try { base64 = await blobToBase64(blob); }
-  catch (e) { readyForNextTurn("Could not read audio — tap the mic to retry"); return; }
+  catch (e) { showError("Could not read audio."); readyForNextTurn("Tap the mic to retry"); return; }
 
-  // Audio is large -> POST (JSONP GET can't carry it). Apps Script web app
-  // (deployed as "Anyone") returns CORS-open JSON for POST.
+  // Audio is large -> POST (JSONP GET can't carry it). Using text/plain avoids
+  // a CORS preflight; Apps Script /exec accepts simple cross-origin POSTs.
+  // 'redirect: follow' is important: Apps Script 302-redirects to
+  // script.googleusercontent.com to serve the response.
   try {
     const resp = await fetch(APPS_SCRIPT_URL + "?api=voice&action=STT", {
       method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" }, // avoids CORS preflight
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      redirect: "follow",
       body: JSON.stringify({ audio: base64, mimeType: mimeType, lang: sttLang() })
     });
-    const data = await resp.json();
+    const raw = await resp.text();
+    let data = {};
+    try { data = JSON.parse(raw); } catch (pe) {
+      console.error("STT non-JSON response:", raw.substring(0, 300));
+      showError("STT backend returned an unexpected response. Redeploy as a NEW version with access = Anyone.");
+      readyForNextTurn("Tap the mic to retry");
+      return;
+    }
+    if (data.error) { console.warn("STT error:", data.error); showError("STT: " + data.error); }
     const transcript = (data && data.transcript ? String(data.transcript) : "").trim();
     if (!transcript) {
-      if (data && data.error) console.warn("STT error:", data.error);
       readyForNextTurn("Didn't catch that — tap the mic and try again");
       return;
     }
-    // Feed the transcript into the existing onboarding/order flow.
-    sendText(transcript);
+    showError("");
+    sendText(transcript);   // feed into onboarding/order flow
   } catch (e) {
     console.error("STT request failed:", e);
-    readyForNextTurn("Network issue — tap the mic to try again");
+    showError("Could not reach STT (CORS/network). Ensure the web app is deployed as 'Anyone'.");
+    readyForNextTurn("Tap the mic to try again");
   }
 }
 
