@@ -425,43 +425,49 @@ async function transcribeAndSend(blob, mimeType) {
   try { base64 = await blobToBase64(blob); }
   catch (e) { showError("Could not read audio."); readyForNextTurn("Tap the mic to retry"); return; }
 
-  var ctrl = new AbortController();
-  var to = setTimeout(function () { ctrl.abort(); }, 15000);  // shorter timeout
+  // Two-step transport (works around Apps Script cross-origin POST limits):
+  //  1) POST the audio with a token using no-cors (we don't read the response).
+  //  2) Poll STT_RESULT via JSONP (GET works cross-origin) to get the transcript.
+  var token = "tok_" + Date.now() + "_" + Math.floor(Math.random() * 1e6);
+
   try {
-    console.log("Sending STT POST, base64 length:", base64.length, "lang:", sttLang());
-    var resp = await fetch(APPS_SCRIPT_URL + "?api=voice&action=STT", {
+    console.log("Sending STT POST (no-cors), base64:", base64.length, "lang:", sttLang(), "token:", token);
+    fetch(APPS_SCRIPT_URL + "?api=voice&action=STT&token=" + token, {
       method: "POST",
+      mode: "no-cors",                                  // send-only; response not read
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      redirect: "follow",
-      signal: ctrl.signal,
-      body: JSON.stringify({ audio: base64, mimeType: mimeType, lang: sttLang() })
-    });
-    clearTimeout(to);
-    var raw = await resp.text();
-    console.log("STT status:", resp.status, "resp:", raw.substring(0, 300));
-    var data = {};
-    try { data = JSON.parse(raw); } catch (pe) {
-      showError("STT bad response: " + raw.substring(0, 120));
-      readyForNextTurn("Tap the mic to retry"); return;
-    }
-    if (data.error) { console.warn("STT error:", data.error); showError("STT: " + String(data.error).substring(0, 120)); }
-    var transcript = (data && data.transcript ? String(data.transcript) : "").trim();
-    if (!transcript) {
-      // Show WHY on screen so we don't need DevTools.
-      showError(data.error ? ("STT: " + String(data.error).substring(0, 120)) : "Empty transcript. Speak longer/clearer.");
-      readyForNextTurn("Tap the mic and try again");
-      return;
-    }
-    showError("");
-    sendText(transcript);
+      body: JSON.stringify({ audio: base64, mimeType: mimeType, lang: sttLang(), token: token })
+    }).catch(function (err) { console.warn("STT POST error (ignored, will poll):", err); });
   } catch (e) {
-    clearTimeout(to);
-    var msg = (e && e.name === "AbortError") ? "STT timed out (POST did not return)." :
-              ("STT network/CORS error: " + (e && e.message ? e.message : e));
-    console.error(msg);
-    showError(msg);
-    readyForNextTurn("Tap the mic to try again");
+    console.warn("STT POST threw (will still poll):", e);
   }
+
+  // Poll for the result via JSONP.
+  var attempts = 0;
+  var maxAttempts = 15;   // ~15 * 1.2s = 18s
+  function poll() {
+    attempts++;
+    callBackend("STT_RESULT", { token: token }, function (err, res) {
+      if (res && res.ready) {
+        var transcript = (res.transcript ? String(res.transcript) : "").trim();
+        if (!transcript) {
+          showError(res.error ? ("STT: " + String(res.error).substring(0, 140)) : "Empty transcript. Speak longer/clearer.");
+          readyForNextTurn("Tap the mic and try again");
+          return;
+        }
+        showError("");
+        sendText(transcript);
+        return;
+      }
+      if (attempts >= maxAttempts) {
+        showError("Transcription is taking too long. Please try again.");
+        readyForNextTurn("Tap the mic to try again");
+        return;
+      }
+      setTimeout(poll, 1200);
+    });
+  }
+  setTimeout(poll, 1500);  // give the POST a moment to process first
 }
 
 /* MIC BUTTON */
