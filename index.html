@@ -426,9 +426,9 @@ async function transcribeAndSend(blob, mimeType) {
   catch (e) { showError("Could not read audio."); readyForNextTurn("Tap the mic to retry"); return; }
 
   var ctrl = new AbortController();
-  var to = setTimeout(function () { ctrl.abort(); }, 25000);
+  var to = setTimeout(function () { ctrl.abort(); }, 15000);  // shorter timeout
   try {
-    console.log("Sending STT POST, base64 length:", base64.length);
+    console.log("Sending STT POST, base64 length:", base64.length, "lang:", sttLang());
     var resp = await fetch(APPS_SCRIPT_URL + "?api=voice&action=STT", {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
@@ -438,21 +438,28 @@ async function transcribeAndSend(blob, mimeType) {
     });
     clearTimeout(to);
     var raw = await resp.text();
-    console.log("STT status:", resp.status, "resp:", raw.substring(0, 200));
+    console.log("STT status:", resp.status, "resp:", raw.substring(0, 300));
     var data = {};
     try { data = JSON.parse(raw); } catch (pe) {
-      showError("STT returned non-JSON (redeploy as NEW version, access Anyone).");
+      showError("STT bad response: " + raw.substring(0, 120));
       readyForNextTurn("Tap the mic to retry"); return;
     }
-    if (data.error) { console.warn("STT error:", data.error); showError("STT: " + data.error); }
+    if (data.error) { console.warn("STT error:", data.error); showError("STT: " + String(data.error).substring(0, 120)); }
     var transcript = (data && data.transcript ? String(data.transcript) : "").trim();
-    if (!transcript) { readyForNextTurn("Didn't catch that — tap the mic and try again"); return; }
+    if (!transcript) {
+      // Show WHY on screen so we don't need DevTools.
+      showError(data.error ? ("STT: " + String(data.error).substring(0, 120)) : "Empty transcript. Speak longer/clearer.");
+      readyForNextTurn("Tap the mic and try again");
+      return;
+    }
     showError("");
     sendText(transcript);
   } catch (e) {
     clearTimeout(to);
-    if (e && e.name === "AbortError") showError("STT timed out.");
-    else showError("Could not reach STT (CORS/network). " + (e && e.message ? e.message : ""));
+    var msg = (e && e.name === "AbortError") ? "STT timed out (POST did not return)." :
+              ("STT network/CORS error: " + (e && e.message ? e.message : e));
+    console.error(msg);
+    showError(msg);
     readyForNextTurn("Tap the mic to try again");
   }
 }
