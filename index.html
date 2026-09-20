@@ -275,7 +275,10 @@ function esc(v) {
 
 /* SPEECH-TO-TEXT (record raw PCM -> WAV -> Sarvam) */
 function sttLang() {
-  if (onboardStep === "ASK_NAME" || onboardStep === "ASK_PHONE" || onboardStep === "ASK_LANGUAGE") return "en-IN";
+  // Language step: auto-detect (the user may say the language name in any
+  // accent). Name/phone: English transcribes names & digits best.
+  if (onboardStep === "ASK_LANGUAGE") return "unknown";
+  if (onboardStep === "ASK_NAME" || onboardStep === "ASK_PHONE") return "en-IN";
   return currentLanguage || "en-IN";
 }
 
@@ -321,11 +324,13 @@ async function startListening() {
       var rms = Math.sqrt(sum / silData.length);
       var elapsed = Date.now() - recordStartAt;
 
-      if (rms > 0.015) {
+      if (rms > 0.012) {
         speechStarted = true;
         clearTimeout(silenceTimer); silenceTimer = null;
-      } else if (speechStarted && elapsed > 1200 && !silenceTimer) {
-        silenceTimer = setTimeout(function () { if (listening) stopListening(); }, 1500);
+      } else if (speechStarted && elapsed > 1500 && !silenceTimer) {
+        // Wait ~2s of silence after speech before stopping, so short words and
+        // natural pauses aren't cut off prematurely.
+        silenceTimer = setTimeout(function () { if (listening) stopListening(); }, 2000);
       }
     };
   } catch (e) {
