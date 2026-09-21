@@ -98,8 +98,10 @@ button.secondary { border: 1px solid #5b2c1f; background: white; color: #5b2c1f;
 var APPS_SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbwT0MBiq-vS2yI4QQ1TIuyOb3h6xDPFpXIJPBNAyW7vipLcZFGL2KEoKwLww_GnLUgqnw/exec";
 
+// Unconstrained endpoint — the ephemeral token carries no baked-in constraints,
+// so the browser sends the full setup (model, tools, audio config) on connect.
 var LIVE_WS_URL =
-  "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.BidiGenerateContentConstrained";
+  "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 
 var LIVE_MODEL = "models/gemini-2.0-flash-live-001";
 
