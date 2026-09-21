@@ -196,10 +196,10 @@ function stopAudio() {
   if ("speechSynthesis" in window) { try { window.speechSynthesis.cancel(); } catch (e) {} }
 }
 
-/* Speak the reply. For English (browser TTS) onDone fires AFTER the
-   utterance ends so the mic never opens while the assistant is talking.
-   For non-English (Sarvam audio fetched in background) onDone fires
-   immediately because there is no synchronous end-of-audio event. */
+/* Speak the reply. onDone fires AFTER speaking ends so the mic never
+   opens while the assistant is talking.
+   - English: browser speechSynthesis, wait for utterance.onend
+   - Non-English (Sarvam): fetch audio, play it, wait for audio.onended */
 function speakThen(res, onDone) {
   stopAudio();
   resetIdleTimer();
@@ -211,38 +211,46 @@ function speakThen(res, onDone) {
   var needAudio = res && res.needAudio && res.language && res.language !== "en-IN";
 
   if (!needAudio) {
+    // ── English path ──────────────────────────────────────────────────────
     if (text && ("speechSynthesis" in window)) {
       try {
         window.speechSynthesis.cancel();
         var u = new SpeechSynthesisUtterance(text);
         u.lang = "en-IN";
         u.rate = 1.0;
-        // Fire onDone only AFTER speaking ends so mic doesn't open mid-sentence.
         u.onend   = function () { finish(); };
-        u.onerror = function () { finish(); };   // always unblock on error too
+        u.onerror = function () { finish(); };
         window.speechSynthesis.speak(u);
-        // Safety net: Chrome sometimes never fires onend. Unblock after
-        // a generous estimate (70 ms per character, minimum 5 s).
+        // Safety net: Chrome sometimes never fires onend.
         setTimeout(function () { finish(); }, Math.max(5000, text.length * 70));
         return;
       } catch (e) { /* fall through */ }
     }
-    // No text, speech not supported, or setup threw — unblock immediately.
-    finish();
+    finish();   // no text / speech not supported
     return;
   }
 
-  // Non-English: fire onDone now, play Sarvam audio in background.
-  finish();
+  // ── Non-English (Sarvam TTS) path ────────────────────────────────────
+  // Show "Speaking…" status so the user knows audio is coming.
+  setStatus("Speaking…", "speaking");
   callBackend("TTS", { lang: res.language, text: text }, function (err, a) {
-    if (err || !a || !a.audio) return;
+    if (err || !a || !a.audio) {
+      // TTS failed — still unblock the mic so the session isn't stuck.
+      finish();
+      return;
+    }
     try {
       if (!sharedAudio) sharedAudio = new Audio();
-      sharedAudio.onerror = function () {};
+      sharedAudio.onerror = function () { finish(); };
+      sharedAudio.onended = function () { finish(); };   // mic opens AFTER audio ends
       sharedAudio.src = "data:audio/wav;base64," + a.audio;
       var p = sharedAudio.play();
-      if (p && p.catch) p.catch(function () {});
-    } catch (e) {}
+      if (p && p.catch) p.catch(function () { finish(); });
+      // Safety net in case onended never fires.
+      setTimeout(function () { finish(); }, Math.max(6000, text.length * 100));
+    } catch (e) {
+      finish();
+    }
   });
 }
 
