@@ -118,7 +118,22 @@ function setMicListening(on) {
 }
 function setMicEnabled(on) { $("micButton").disabled = !on; }
 
-/* JSONP */
+/* JSONP
+   Timeout table (ms):
+     COMMAND / ONBOARD_TURN  — 58 000  (Apps Script doGet ceiling is ~60s;
+                                         a 5-item order now takes ~4-6s after
+                                         the batch-addToCart fix, but we keep
+                                         the ceiling high for cold-start + Gemini)
+     STT_RESULT poll calls   —  8 000  (each individual poll is short)
+     Everything else         — 25 000  (TTS, CART, CONFIG, START)
+*/
+var BACKEND_TIMEOUT = {
+  COMMAND:      58000,
+  ONBOARD_TURN: 58000,
+  STT_RESULT:    8000,
+  DEFAULT:      25000
+};
+
 function callBackend(action, params, cb) {
   var name = "rrcb_" + Date.now() + "_" + Math.floor(Math.random() * 1e6);
   var q = new URLSearchParams();
@@ -127,11 +142,12 @@ function callBackend(action, params, cb) {
   Object.keys(params).forEach(function (k) { q.set(k, params[k] == null ? "" : params[k]); });
   var script = document.createElement("script");
   var done = false;
+  var ms = BACKEND_TIMEOUT[action.toUpperCase()] || BACKEND_TIMEOUT.DEFAULT;
   var t = setTimeout(function () {
     if (done) return; done = true;
-    cb(new Error("Request timed out."), null);
+    cb(new Error("Request timed out after " + Math.round(ms/1000) + "s. Apps Script may be slow — please try again."), null);
     delete window[name]; if (script.parentNode) script.remove();
-  }, 20000);
+  }, ms);
   window[name] = function (res) {
     if (done) return; done = true; clearTimeout(t);
     cb(null, res); delete window[name]; if (script.parentNode) script.remove();
@@ -200,11 +216,38 @@ function speakThen(res, onDone) {
 function applyResponse(res) {
   if (res.sessionId) sessionId = res.sessionId;
   if (res.language) currentLanguage = res.language;
-  if (res.onboardState) onboardStep = res.onboardState;
+
+  // FIX: onboardState is only present on onboarding responses. Keep the
+  // browser's onboardStep in sync but never let it go BACKWARDS. Also
+  // detect the ORDERING handoff so the next mic tap goes to food ordering.
+  if (res.onboardState) {
+    onboardStep = res.onboardState;
+  } else if (res.mode === "ORDERING") {
+    // COMMAND response from the ordering flow — mark as ORDERING if not already.
+    onboardStep = "ORDERING";
+  }
+
   if (res.speak) setAssistant(res.speak);
   if (res.cart) renderCart(res.cart);
 }
+
+/* Animated dots in the status bar while waiting for a long backend call.
+   Cleared automatically when readyForNextTurn() is called. */
+var thinkingTimer = null;
+function startThinkingDots() {
+  var dots = 0;
+  var labels = ["Thinking", "Thinking.", "Thinking..", "Thinking..."];
+  thinkingTimer = setInterval(function () {
+    dots = (dots + 1) % labels.length;
+    setStatus(labels[dots], "thinking");
+  }, 600);
+}
+function stopThinkingDots() {
+  if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
+}
+
 function readyForNextTurn(label) {
+  stopThinkingDots();
   busy = false;
   setStatus(label || "Your turn — tap the mic", "");
   setMicListening(false);
@@ -232,8 +275,16 @@ function sendText(text) {
   setHeard(text);
   busy = true; setMicEnabled(false);
   setStatus("Thinking...", "thinking");
+  startThinkingDots();  // animated dots — reassures user the request is in flight
   callBackend("COMMAND", { sessionId: sessionId, text: text }, function (err, res) {
-    if (err) { showError(err.message); setStatus("Error", "error"); readyForNextTurn(); return; }
+    stopThinkingDots();
+    if (err) {
+      // Give a friendlier message when it's a timeout (Apps Script was just slow).
+      var msg = (err.message || "").indexOf("timed out") !== -1
+        ? "Taking longer than expected — please tap the mic and try again."
+        : err.message;
+      showError(msg); setStatus("Error — tap to retry", "error"); readyForNextTurn(); return;
+    }
     if (!res || res.ok === false) {
       showError(res && res.error ? res.error + (res.detail ? " — " + res.detail : "") : "Something went wrong.");
       setStatus("Error", "error"); readyForNextTurn(); return;
@@ -449,7 +500,7 @@ async function transcribeAndSend(blob, mimeType) {
 
   // Poll for the result via JSONP.
   var attempts = 0;
-  var maxAttempts = 22;   // ~22 * 0.6s ≈ 13s window
+  var maxAttempts = 40;   // 40 × 0.6s = 24s window — covers slow Sarvam STT on long audio
   function poll() {
     attempts++;
     callBackend("STT_RESULT", { token: token }, function (err, res) {
@@ -465,14 +516,14 @@ async function transcribeAndSend(blob, mimeType) {
         return;
       }
       if (attempts >= maxAttempts) {
-        showError("Transcription is taking too long. Please try again.");
+        showError("Transcription timed out — please tap the mic and try again.");
         readyForNextTurn("Tap the mic to try again");
         return;
       }
-      setTimeout(poll, 600);   // SPEED: poll faster
+      setTimeout(poll, 600);
     });
   }
-  setTimeout(poll, 500);       // SPEED: start polling sooner
+  setTimeout(poll, 600);   // first poll at 600ms (Sarvam rarely responds faster)
 }
 
 /* MIC BUTTON */
