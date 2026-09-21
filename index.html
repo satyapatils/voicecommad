@@ -404,6 +404,33 @@ function sendText(text) {
     }
     showError("");
     applyResponse(res);
+
+    // ── ORDER PLACED: stop hands-free, end the session ───────────────────
+    if (res.intent === "ORDER_PLACED") {
+      // Stop the idle timer and hands-free mic — no more auto-listening.
+      handsFreeActive = false;
+      if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+      idlePromptsGiven = 0;
+      stopThinkingDots();
+      busy = false;
+      setMicEnabled(true);
+
+      // Speak the confirmation, then show a clear "tap to start new order" state.
+      speakThen(res, function () {
+        setStatus("Order placed ✓  — tap the mic to start a new order", "");
+        setMicListening(false);
+        // Reset session so the NEXT tap starts fresh onboarding.
+        setTimeout(function () {
+          sessionId = "";
+          currentLanguage = "en-IN";
+          onboardStep = "ASK_PHONE";
+          started = false;
+        }, 2000);   // small delay so the order confirmation stays visible briefly
+      });
+      return;
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     speakThen(res, function () {
       readyForNextTurn();
       scheduleIdleCheck();  // start idle countdown after assistant finishes
