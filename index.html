@@ -275,6 +275,7 @@ function startSession() {
       return;
     }
     sessionId = res.sessionId || "";
+    if (res.speak) setAssistant(res.speak);   // show greeting immediately
     refreshCart();
     openLiveSession();
   });
@@ -381,15 +382,19 @@ function liveToolDeclarations() {
 }
 
 function openLiveSession() {
-  setStatus("Connecting to voice…", "thinking");
+  setStatus("Getting voice token…", "thinking");
   callBackend("GET_TOKEN", { sessionId: sessionId }, function (err, res) {
     if (err || !res || !res.ok || !res.token) {
-      showError("Voice token error: " + (err ? err.message : (res && res.error) || "unknown"));
-      setStatus("Error — tap to retry", "error");
+      var detail = err ? err.message : ((res && res.error) || "unknown");
+      if (res && res.detail) detail += " — " + res.detail;
+      showError("Voice token error: " + detail);
+      setStatus("Token error — tap to retry", "error");
       setMicEnabled(true); started = false;
+      console.error("GET_TOKEN failed:", res);
       return;
     }
     liveToken = res.token;
+    setStatus("Opening voice channel…", "thinking");
     liveConnect();
   });
 }
@@ -419,21 +424,44 @@ function liveConnect() {
   };
 
   liveWs.onmessage = function (ev) {
-    var data;
-    try { data = JSON.parse(ev.data); } catch(e) { return; }
-    liveHandleMessage(data);
+    // Gemini Live can send text OR binary (Blob) frames. Handle both.
+    if (typeof ev.data === "string") {
+      var data;
+      try { data = JSON.parse(ev.data); } catch(e) { console.warn("Non-JSON text frame", ev.data); return; }
+      liveHandleMessage(data);
+    } else if (ev.data instanceof Blob) {
+      ev.data.text().then(function (txt) {
+        var d;
+        try { d = JSON.parse(txt); } catch(e) { console.warn("Non-JSON blob frame", txt); return; }
+        liveHandleMessage(d);
+      });
+    } else if (ev.data instanceof ArrayBuffer) {
+      try {
+        var s = new TextDecoder("utf-8").decode(ev.data);
+        liveHandleMessage(JSON.parse(s));
+      } catch(e) { console.warn("Non-JSON binary frame"); }
+    }
   };
 
-  liveWs.onerror = function () {
-    showError("Voice connection error — tap to retry.");
-    setStatus("Error", "error");
+  liveWs.onerror = function (e) {
+    console.error("Gemini Live WS error", e);
+    showError("Voice connection error — tap the mic to retry.");
+    setStatus("Voice error — tap to retry", "error");
     setMicEnabled(true);
     liveListening = false; liveReady = false;
   };
 
-  liveWs.onclose = function () {
+  liveWs.onclose = function (e) {
+    console.log("Gemini Live WS closed. code=" + e.code + " reason=" + e.reason);
     liveListening = false; liveReady = false;
     liveStopMic();
+    // Surface abnormal closes so the cause is visible on screen.
+    if (!sessionEnded && !liveReady && e.code !== 1000) {
+      var reason = e.reason || ("closed with code " + e.code);
+      showError("Voice disconnected: " + reason + " — tap the mic to retry.");
+      setStatus("Voice disconnected — tap to retry", "error");
+      setMicEnabled(true);
+    }
   };
 }
 
