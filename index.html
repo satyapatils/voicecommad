@@ -432,11 +432,16 @@ async function transcribeAndSend(blob, mimeType) {
 
   try {
     console.log("Sending STT POST (no-cors), base64:", base64.length, "lang:", sttLang(), "token:", token);
+    // During ORDERING with a non-English language, ask STT to TRANSLATE to
+    // English in the same call (saves a separate translate round trip). During
+    // onboarding (language/name/phone) we transcribe as-is.
+    var sttMode = (onboardStep === "ORDERING" && currentLanguage && currentLanguage !== "en-IN")
+      ? "translate" : "transcribe";
     fetch(APPS_SCRIPT_URL + "?api=voice&action=STT&token=" + token, {
       method: "POST",
       mode: "no-cors",                                  // send-only; response not read
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ audio: base64, mimeType: mimeType, lang: sttLang(), token: token })
+      body: JSON.stringify({ audio: base64, mimeType: mimeType, lang: sttLang(), mode: sttMode, token: token })
     }).catch(function (err) { console.warn("STT POST error (ignored, will poll):", err); });
   } catch (e) {
     console.warn("STT POST threw (will still poll):", e);
@@ -444,7 +449,7 @@ async function transcribeAndSend(blob, mimeType) {
 
   // Poll for the result via JSONP.
   var attempts = 0;
-  var maxAttempts = 15;   // ~15 * 1.2s = 18s
+  var maxAttempts = 22;   // ~22 * 0.6s ≈ 13s window
   function poll() {
     attempts++;
     callBackend("STT_RESULT", { token: token }, function (err, res) {
@@ -464,10 +469,10 @@ async function transcribeAndSend(blob, mimeType) {
         readyForNextTurn("Tap the mic to try again");
         return;
       }
-      setTimeout(poll, 1200);
+      setTimeout(poll, 600);   // SPEED: poll faster
     });
   }
-  setTimeout(poll, 1500);  // give the POST a moment to process first
+  setTimeout(poll, 500);       // SPEED: start polling sooner
 }
 
 /* MIC BUTTON */
