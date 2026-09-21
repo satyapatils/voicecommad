@@ -98,10 +98,9 @@ button.secondary { border: 1px solid #5b2c1f; background: white; color: #5b2c1f;
 var APPS_SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbwT0MBiq-vS2yI4QQ1TIuyOb3h6xDPFpXIJPBNAyW7vipLcZFGL2KEoKwLww_GnLUgqnw/exec";
 
-// Unconstrained endpoint — the ephemeral token carries no baked-in constraints,
-// so the browser sends the full setup (model, tools, audio config) on connect.
+// Ephemeral tokens use the Constrained endpoint and are passed as access_token.
 var LIVE_WS_URL =
-  "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
+  "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained";
 
 var LIVE_MODEL = "models/gemini-2.0-flash-live-001";
 
@@ -405,7 +404,8 @@ function liveConnect() {
   if (liveWs) { try { liveWs.close(); } catch(e){} liveWs = null; }
   liveReady = false; liveListening = false;
 
-  liveWs = new WebSocket(LIVE_WS_URL + "?key=" + encodeURIComponent(liveToken));
+  // Ephemeral token is passed as access_token (NOT key — key is for raw API keys).
+  liveWs = new WebSocket(LIVE_WS_URL + "?access_token=" + encodeURIComponent(liveToken));
 
   liveWs.onopen = function () {
     var setup = {
