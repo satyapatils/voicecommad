@@ -54,7 +54,7 @@ button.secondary { border: 1px solid #5b2c1f; background: white; color: #5b2c1f;
     <div class="mic-area">
       <button id="micButton" onclick="onMicTap()">🎙️</button>
       <div class="mic-label" id="micLabel">Tap to talk</div>
-      <div class="hint">Tap the mic, speak, then tap again (or pause) to send.</div>
+      <div class="hint">Tap the mic once to start — conversation continues hands-free.</div>
     </div>
   </div>
 
@@ -196,10 +196,12 @@ function stopAudio() {
   if ("speechSynthesis" in window) { try { window.speechSynthesis.cancel(); } catch (e) {} }
 }
 
-/* Speak the reply, then hand control back IMMEDIATELY (audio plays in bg). */
+/* Speak the reply, then call onDone AFTER speaking finishes.
+   For English (browser TTS): wait for utterance to end before re-enabling the mic.
+   For non-English (Sarvam TTS fetched in background): fire onDone immediately
+   since audio plays asynchronously and we don't want to block the UI. */
 function speakThen(res, onDone) {
   stopAudio();
-  // Any customer activity resets the idle counter.
   resetIdleTimer();
 
   var done = false;
@@ -209,19 +211,34 @@ function speakThen(res, onDone) {
   var needAudio = res && res.needAudio && res.language && res.language !== "en-IN";
 
   if (!needAudio) {
-    finish();  // re-enable mic / start idle timer now
+    // English path: disable the mic WHILE speaking, re-enable only after speech ends.
     if (text && ("speechSynthesis" in window)) {
       try {
         window.speechSynthesis.cancel();
         var u = new SpeechSynthesisUtterance(text);
         u.lang = "en-IN";
+        u.rate = 1.0;
+        u.onend = function () { finish(); };
+        u.onerror = function () { finish(); };  // always unblock even on error
         window.speechSynthesis.speak(u);
-      } catch (e) {}
+
+        // Safety net: if speechSynthesis never fires onend (Chrome bug on some
+        // platforms), unblock after a generous timeout so the mic isn't stuck.
+        var safetyMs = Math.max(4000, text.length * 70);
+        setTimeout(function () { finish(); }, safetyMs);
+        return;
+      } catch (e) {
+        // Fall through to finish() below if speech setup throws.
+      }
     }
+    // No text or speech not supported — unblock immediately.
+    finish();
     return;
   }
 
-  finish();  // re-enable mic now; fetch + play Kannada/Hindi audio in background
+  // Non-English: fire onDone immediately so the UI unblocks while Sarvam
+  // audio is fetched and played in the background.
+  finish();
   callBackend("TTS", { lang: res.language, text: text }, function (err, a) {
     if (err || !a || !a.audio) return;
     try {
