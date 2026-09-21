@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Roots & Ruchi - Voice Ordering</title>
+<title>Roots &amp; Ruchi - Voice Ordering</title>
 <style>
 * { box-sizing: border-box; }
 body { margin: 0; font-family: Arial, sans-serif; background: #f7f4ef; color: #2d241e; }
@@ -15,25 +15,25 @@ body { margin: 0; font-family: Arial, sans-serif; background: #f7f4ef; color: #2
 .status { text-align: center; font-size: 16px; margin-bottom: 18px; font-weight: bold; }
 .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #888; margin-right: 7px; }
 .status-listening .status-dot { background: #2e9d50; }
-.status-speaking .status-dot { background: #d99000; }
-.status-thinking .status-dot { background: #2d7dd2; }
-.status-error .status-dot { background: #d33; }
+.status-speaking .status-dot  { background: #d99000; }
+.status-thinking .status-dot  { background: #2d7dd2; }
+.status-error .status-dot     { background: #d33; }
 .mic-area { text-align: center; padding: 10px 0 20px; }
 #micButton { width: 115px; height: 115px; border-radius: 50%; border: none; background: #5b2c1f; color: white; font-size: 46px; cursor: pointer; box-shadow: 0 7px 20px rgba(91,44,31,0.3); }
 #micButton.listening { background: #a33b25; animation: pulse 1.3s infinite; }
 #micButton:disabled { opacity: 0.5; cursor: not-allowed; }
-@keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.08); } 100% { transform: scale(1); } }
+@keyframes pulse { 0%{transform:scale(1);} 50%{transform:scale(1.08);} 100%{transform:scale(1);} }
 .mic-label { margin-top: 12px; font-size: 16px; color: #666; }
 .section-title { font-weight: bold; font-size: 18px; margin-bottom: 10px; }
-.heard { min-height: 45px; background: #f2eee9; padding: 14px; border-radius: 10px; line-height: 1.5; }
+.heard     { min-height: 45px; background: #f2eee9; padding: 14px; border-radius: 10px; line-height: 1.5; }
 .assistant { min-height: 45px; background: #fff4df; padding: 14px; border-radius: 10px; line-height: 1.5; }
 .cart-item { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #eee; }
 .cart-name { font-weight: bold; }
-.cart-qty { color: #777; font-size: 14px; }
+.cart-qty  { color: #777; font-size: 14px; }
 .total { display: flex; justify-content: space-between; font-size: 21px; font-weight: bold; margin-top: 15px; }
 .buttons { display: flex; gap: 10px; margin-top: 15px; flex-wrap: wrap; }
 button.secondary { border: 1px solid #5b2c1f; background: white; color: #5b2c1f; padding: 12px 18px; border-radius: 10px; cursor: pointer; }
-.hint { text-align: center; color: #777; font-size: 13px; margin-top: 12px; }
+.hint  { text-align: center; color: #777; font-size: 13px; margin-top: 12px; }
 .error { color: #c62828; font-size: 14px; margin-top: 10px; }
 .empty { color: #888; padding: 10px 0; }
 @media(max-width:600px) { .header h1 { font-size: 23px; } .card { padding: 17px; } }
@@ -54,7 +54,7 @@ button.secondary { border: 1px solid #5b2c1f; background: white; color: #5b2c1f;
     <div class="mic-area">
       <button id="micButton" onclick="onMicTap()">🎙️</button>
       <div class="mic-label" id="micLabel">Tap to talk</div>
-      <div class="hint">Tap the mic, speak, then tap again (or pause) to send.</div>
+      <div class="hint">Tap once to start — conversation continues hands-free.</div>
     </div>
   </div>
 
@@ -84,73 +84,88 @@ button.secondary { border: 1px solid #5b2c1f; background: white; color: #5b2c1f;
 </div>
 
 <script>
-/* CONFIG */
+/* ═══════════════════════════════════════════════════════════════════════════
+   ROOTS & RUCHI — VOICE ORDERING FRONTEND
+   STT + TTS: Gemini Live (WebSocket, streaming, low-latency)
+   Business logic: Google Apps Script + Google Sheets (unchanged)
+   Onboarding (phone / language / name): Apps Script JSONP (unchanged)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── CONFIG ─────────────────────────────────────────────────────────────── */
 var APPS_SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycbwT0MBiq-vS2yI4QQ1TIuyOb3h6xDPFpXIJPBNAyW7vipLcZFGL2KEoKwLww_GnLUgqnw/exec";
 
-/* STATE */
-var sessionId = "";
-var currentLanguage = "en-IN";
-var onboardStep = "ASK_PHONE";   // NEW: first step is now phone number
-var started = false;
-var listening = false;
-var busy = false;
-var sharedAudio = null;
-var audioUnlocked = false;
+var LIVE_WS_URL =
+  "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.BidiGenerateContentConstrained";
 
-// Hands-free: after the first tap the mic restarts automatically after
-// every assistant reply until the session ends or an error occurs.
+var LIVE_MODEL = "models/gemini-2.0-flash-live-001";
+
+/* ── SESSION STATE ───────────────────────────────────────────────────────── */
+var sessionId       = "";
+var currentLanguage = "en-IN";
+var onboardStep     = "ASK_PHONE"; // ASK_PHONE → ASK_LANGUAGE → ASK_NAME → ORDERING
+var started         = false;
+var busy            = false;
+var audioUnlocked   = false;
 var handsFreeActive = false;
 
-/* ── IDLE-TIMEOUT ENGINE ────────────────────────────────────────────────────
-   After the assistant speaks, if the customer says nothing for IDLE_GAP_MS,
-   we prompt them ("Are you still there?"). After MAX_IDLE_PROMPTS ignored
-   prompts the session is ended and the cart is cleared.
-   ─────────────────────────────────────────────────────────────────────────── */
-var IDLE_GAP_MS        = 15000;   // 15 s of silence before first prompt
-var MAX_IDLE_PROMPTS   = 3;       // 3 unanswered prompts → end session
-var idleTimer          = null;
-var idlePromptsGiven   = 0;
-var IDLE_PROMPTS_EN    = [
+/* ── IDLE-TIMEOUT ENGINE ─────────────────────────────────────────────────── */
+var IDLE_GAP_MS      = 15000;
+var MAX_IDLE_PROMPTS = 3;
+var idleTimer        = null;
+var idlePromptsGiven = 0;
+var IDLE_PROMPTS_EN  = [
   "Are you still there? What would you like to order?",
   "I'm still here — would you like to add something or place your order?",
   "I'll close this session now. Your cart has been cleared. Tap the mic to start a new order."
 ];
 
-/* Recording state (raw PCM -> WAV, because Sarvam rejects webm) */
-var micStream = null;
-var audioCtx = null, sourceNode = null, procNode = null, analyser = null;
-var pcmChunks = [];
-var recSampleRate = 16000;
-var silenceTimer = null, maxTimer = null, speechStarted = false, recordStartAt = 0;
+/* ── GEMINI LIVE STATE ───────────────────────────────────────────────────── */
+var liveWs          = null;   // WebSocket to Gemini Live
+var liveReady       = false;  // true after BidiGenerateContentSetupComplete
+var liveToken       = null;   // ephemeral token (string)
+var liveMicStream   = null;   // MediaStream from getUserMedia
+var liveAudioCtx    = null;   // AudioContext for mic capture + playback
+var liveSrcNode     = null;   // MediaStreamAudioSourceNode
+var liveProcNode    = null;   // ScriptProcessorNode (mic → WebSocket)
+var liveListening   = false;  // mic is open and streaming
+var liveOutputNode  = null;   // AudioContext destination for playback
+var liveOutputQueue = [];     // queued PCM chunks waiting to play
+var liveOutputBusy  = false;  // playback in progress
 
-/* UI HELPERS */
+/* ── UI HELPERS ─────────────────────────────────────────────────────────── */
 function $(id) { return document.getElementById(id); }
-function setStatus(t, type) { $("statusText").textContent = t; var s = $("status"); s.className = "status"; if (type) s.classList.add("status-" + type); }
+
+function setStatus(t, type) {
+  $("statusText").textContent = t;
+  var s = $("status");
+  s.className = "status";
+  if (type) s.classList.add("status-" + type);
+}
 function setAssistant(t) { $("assistant").textContent = t || ""; }
-function setHeard(t) { $("heard").textContent = t || ""; }
-function showError(t) { $("error").textContent = t || ""; }
+function setHeard(t)      { $("heard").textContent = t || ""; }
+function showError(t)     { $("error").textContent = t || ""; }
+
 function setMicListening(on) {
   var b = $("micButton");
-  if (on) { b.classList.add("listening"); b.textContent = "🛑"; $("micLabel").textContent = "Listening… (tap to pause)"; }
-  else { b.classList.remove("listening"); b.textContent = "🎙️"; $("micLabel").textContent = handsFreeActive ? "Hands-free ON" : "Tap to talk"; }
+  if (on) {
+    b.classList.add("listening");
+    b.textContent = "🛑";
+    $("micLabel").textContent = "Listening… (tap to pause)";
+  } else {
+    b.classList.remove("listening");
+    b.textContent = "🎙️";
+    $("micLabel").textContent = handsFreeActive ? "Hands-free ON" : "Tap to talk";
+  }
 }
 function setMicEnabled(on) { $("micButton").disabled = !on; }
 
-/* JSONP
-   Timeout table (ms):
-     COMMAND / ONBOARD_TURN  — 58 000  (Apps Script doGet ceiling is ~60s;
-                                         a 5-item order now takes ~4-6s after
-                                         the batch-addToCart fix, but we keep
-                                         the ceiling high for cold-start + Gemini)
-     STT_RESULT poll calls   —  8 000  (each individual poll is short)
-     Everything else         — 25 000  (TTS, CART, CONFIG, START)
-*/
+/* ── JSONP BACKEND CALLS ─────────────────────────────────────────────────── */
 var BACKEND_TIMEOUT = {
-  COMMAND:      58000,
-  ONBOARD_TURN: 58000,
-  STT_RESULT:    8000,
-  DEFAULT:      25000
+  COMMAND:    58000,
+  TOOL_CALL:  58000,
+  GET_TOKEN:  15000,
+  DEFAULT:    25000
 };
 
 function callBackend(action, params, cb) {
@@ -158,123 +173,78 @@ function callBackend(action, params, cb) {
   var q = new URLSearchParams();
   q.set("api", "voice"); q.set("action", action); q.set("callback", name);
   params = params || {};
-  Object.keys(params).forEach(function (k) { q.set(k, params[k] == null ? "" : params[k]); });
+  Object.keys(params).forEach(function (k) {
+    q.set(k, params[k] == null ? "" : params[k]);
+  });
   var script = document.createElement("script");
   var done = false;
   var ms = BACKEND_TIMEOUT[action.toUpperCase()] || BACKEND_TIMEOUT.DEFAULT;
   var t = setTimeout(function () {
     if (done) return; done = true;
-    cb(new Error("Request timed out after " + Math.round(ms/1000) + "s. Apps Script may be slow — please try again."), null);
-    delete window[name]; if (script.parentNode) script.remove();
+    cb(new Error("Request timed out after " + Math.round(ms / 1000) + "s."), null);
+    delete window[name];
+    if (script.parentNode) script.remove();
   }, ms);
   window[name] = function (res) {
     if (done) return; done = true; clearTimeout(t);
-    cb(null, res); delete window[name]; if (script.parentNode) script.remove();
+    cb(null, res);
+    delete window[name];
+    if (script.parentNode) script.remove();
   };
   script.onerror = function () {
     if (done) return; done = true; clearTimeout(t);
     cb(new Error("Unable to connect to backend."), null);
-    delete window[name]; if (script.parentNode) script.remove();
+    delete window[name];
+    if (script.parentNode) script.remove();
   };
   script.src = APPS_SCRIPT_URL + "?" + q.toString();
   document.body.appendChild(script);
 }
 
-/* AUDIO */
+/* ── AUDIO UNLOCK (required by browsers before play()) ──────────────────── */
 function unlockAudio() {
   if (audioUnlocked) return;
   try {
-    if (!sharedAudio) sharedAudio = new Audio();
-    sharedAudio.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
-    var p = sharedAudio.play();
-    if (p && p.then) p.then(function () { sharedAudio.pause(); sharedAudio.currentTime = 0; }).catch(function () {});
+    var a = new Audio();
+    a.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
+    var p = a.play();
+    if (p && p.then) p.then(function () { a.pause(); }).catch(function () {});
     audioUnlocked = true;
   } catch (e) {}
 }
-function stopAudio() {
-  if (sharedAudio) { try { sharedAudio.pause(); sharedAudio.currentTime = 0; } catch (e) {} }
-  if ("speechSynthesis" in window) { try { window.speechSynthesis.cancel(); } catch (e) {} }
-}
 
-/* Speak the reply. onDone fires AFTER speaking ends so the mic never
-   opens while the assistant is talking.
-   - English: browser speechSynthesis, wait for utterance.onend
-   - Non-English (Sarvam): fetch audio, play it, wait for audio.onended */
-function speakThen(res, onDone) {
-  stopAudio();
-  resetIdleTimer();
-
+/* ── BROWSER TTS (used for onboarding only) ──────────────────────────────── */
+function speakBrowser(text, onDone) {
   var done = false;
   var finish = function () { if (done) return; done = true; if (onDone) onDone(); };
-
-  var text = (res && res.speak) || "";
-  var needAudio = res && res.needAudio && res.language && res.language !== "en-IN";
-
-  if (!needAudio) {
-    // ── English path ──────────────────────────────────────────────────────
-    if (text && ("speechSynthesis" in window)) {
-      try {
-        window.speechSynthesis.cancel();
-        var u = new SpeechSynthesisUtterance(text);
-        u.lang = "en-IN";
-        u.rate = 1.0;
-        u.onend   = function () { finish(); };
-        u.onerror = function () { finish(); };
-        window.speechSynthesis.speak(u);
-        // Safety net: Chrome sometimes never fires onend.
-        setTimeout(function () { finish(); }, Math.max(5000, text.length * 70));
-        return;
-      } catch (e) { /* fall through */ }
-    }
-    finish();   // no text / speech not supported
-    return;
-  }
-
-  // ── Non-English (Sarvam TTS) path ────────────────────────────────────
-  // Show "Speaking…" status so the user knows audio is coming.
-  setStatus("Speaking…", "speaking");
-  callBackend("TTS", { lang: res.language, text: text }, function (err, a) {
-    if (err || !a || !a.audio) {
-      // TTS failed — still unblock the mic so the session isn't stuck.
-      finish();
-      return;
-    }
-    try {
-      if (!sharedAudio) sharedAudio = new Audio();
-      sharedAudio.onerror = function () { finish(); };
-      sharedAudio.onended = function () { finish(); };   // mic opens AFTER audio ends
-      sharedAudio.src = "data:audio/wav;base64," + a.audio;
-      var p = sharedAudio.play();
-      if (p && p.catch) p.catch(function () { finish(); });
-      // Safety net in case onended never fires.
-      setTimeout(function () { finish(); }, Math.max(6000, text.length * 100));
-    } catch (e) {
-      finish();
-    }
-  });
+  if (!text || !("speechSynthesis" in window)) { finish(); return; }
+  try {
+    window.speechSynthesis.cancel();
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang  = "en-IN";
+    u.rate  = 1.0;
+    u.onend   = function () { finish(); };
+    u.onerror = function () { finish(); };
+    window.speechSynthesis.speak(u);
+    // Safety net — Chrome sometimes never fires onend.
+    setTimeout(finish, Math.max(5000, text.length * 70));
+  } catch (e) { finish(); }
 }
 
-/* RESPONSE HANDLING */
+/* ── RESPONSE HANDLING (onboarding JSONP responses) ─────────────────────── */
 function applyResponse(res) {
   if (res.sessionId) sessionId = res.sessionId;
-  if (res.language) currentLanguage = res.language;
-
-  // FIX: onboardState is only present on onboarding responses. Keep the
-  // browser's onboardStep in sync but never let it go BACKWARDS. Also
-  // detect the ORDERING handoff so the next mic tap goes to food ordering.
+  if (res.language)  currentLanguage = res.language;
   if (res.onboardState) {
     onboardStep = res.onboardState;
   } else if (res.mode === "ORDERING") {
-    // COMMAND response from the ordering flow — mark as ORDERING if not already.
     onboardStep = "ORDERING";
   }
-
-  if (res.speak) setAssistant(res.speak);
-  if (res.cart) renderCart(res.cart);
+  if (res.speak)    setAssistant(res.speak);
+  if (res.cart)     renderCart(res.cart);
 }
 
-/* Animated dots in the status bar while waiting for a long backend call.
-   Cleared automatically when readyForNextTurn() is called. */
+/* ── THINKING DOTS ───────────────────────────────────────────────────────── */
 var thinkingTimer = null;
 function startThinkingDots() {
   var dots = 0;
@@ -288,33 +258,25 @@ function stopThinkingDots() {
   if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
 }
 
+/* ── READY FOR NEXT TURN ─────────────────────────────────────────────────── */
 function readyForNextTurn(label) {
   stopThinkingDots();
   busy = false;
   setStatus(label || "Listening…", "");
   setMicListening(false);
   setMicEnabled(true);
-
-  // Hands-free: auto-start the mic so the customer never needs to tap again.
-  if (handsFreeActive && !listening) {
+  if (handsFreeActive && !liveListening) {
     setTimeout(function () {
-      if (!busy && !listening && handsFreeActive) startListening();
-    }, 400);  // brief pause so TTS audio doesn't immediately bleed into the mic
+      if (!busy && !liveListening && handsFreeActive) liveStartMic();
+    }, 400);
   }
 }
 
 /* ── IDLE-TIMEOUT ENGINE ─────────────────────────────────────────────────── */
-
-/** Cancel any pending idle timer (called whenever the customer speaks). */
 function resetIdleTimer() {
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-  // Don't reset the prompt count here — it accumulates across silences.
 }
 
-/**
- * Start the idle countdown after the assistant finishes speaking.
- * Only active when hands-free is on and the session is in ORDERING state.
- */
 function scheduleIdleCheck() {
   if (!handsFreeActive || onboardStep !== "ORDERING") return;
   if (idleTimer) clearTimeout(idleTimer);
@@ -323,137 +285,46 @@ function scheduleIdleCheck() {
 
 function onIdleTick() {
   idleTimer = null;
-  if (busy || listening) return; // customer is already talking — ignore
+  if (busy || liveListening) return;
 
   var prompt = IDLE_PROMPTS_EN[Math.min(idlePromptsGiven, IDLE_PROMPTS_EN.length - 1)];
   idlePromptsGiven++;
 
   if (idlePromptsGiven >= MAX_IDLE_PROMPTS) {
-    // Third strike — stop everything, clear cart, return to initial state.
-    handsFreeActive = false;        // stop any pending mic auto-restart
+    handsFreeActive = false;
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-    stopListening();                // stop mic if open
-    setMicEnabled(false);           // disable during the farewell speech
-
-    // Clear cart on backend.
+    liveStopMic();
+    setMicEnabled(false);
     if (sessionId) {
       callBackend("COMMAND", { sessionId: sessionId, text: "__force_clear__" }, function () {});
     }
-
-    var farewell = IDLE_PROMPTS_EN[IDLE_PROMPTS_EN.length - 1];
-    setAssistant(farewell);
+    setAssistant(prompt);
     setStatus("Session ended", "");
-
-    // Speak farewell, then fully reset to initial "tap to start" state.
-    var farewellRes = { speak: farewell, needAudio: false };
-    speakThen(farewellRes, function () {
-      // Full reset — same as a page refresh minus the mic permission.
+    speakBrowser(prompt, function () {
       sessionId = ""; currentLanguage = "en-IN"; onboardStep = "ASK_PHONE";
-      idlePromptsGiven = 0;
-      started = false;
-      handsFreeActive = false;
+      idlePromptsGiven = 0; started = false; handsFreeActive = false;
+      liveClose();
       $("cart").innerHTML = '<div class="empty">Your cart is empty.</div>';
       $("total").textContent = "₹0";
       setHeard("Waiting...");
       setAssistant("Tap the mic to start a new order.");
       setStatus("Tap the mic to start", "");
       setMicListening(false);
-      setMicEnabled(true);          // re-enable so the customer can tap again
+      setMicEnabled(true);
     });
     return;
   }
 
-  // Show prompt and speak it, then schedule the next tick AFTER speaking ends.
   setAssistant(prompt);
-  var idleRes = { speak: prompt, needAudio: false };
-  speakThen(idleRes, function () { scheduleIdleCheck(); });
+  speakBrowser(prompt, function () { scheduleIdleCheck(); });
 }
 
-/** Cancel idle timer and reset prompt count — called when customer speaks. */
 function customerSpoke() {
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   idlePromptsGiven = 0;
 }
 
-/* SESSION */
-function startSession() {
-  busy = true; setMicEnabled(false);
-  setStatus("Connecting...", "thinking");
-  callBackend("ONBOARD_START", {}, function (err, res) {
-    if (err) { showError(err.message); setStatus("Connection failed", "error"); readyForNextTurn(); return; }
-    if (!res || res.ok === false) { showError((res && res.error) || "Unable to start."); setStatus("Error", "error"); readyForNextTurn(); return; }
-    showError("");
-    applyResponse(res);
-    refreshCart();
-    // Activate hands-free from this point on — customer only tapped once.
-    handsFreeActive = true;
-    idlePromptsGiven = 0;
-    speakThen(res, function () {
-      readyForNextTurn();
-      scheduleIdleCheck();
-    });
-  });
-}
-
-/* SEND UTTERANCE */
-function sendText(text) {
-  text = String(text || "").trim();
-  if (!text) { readyForNextTurn("Didn't catch that — listening again…"); return; }
-  customerSpoke();   // reset idle timer: customer is actively talking
-  setHeard(text);
-  busy = true; setMicEnabled(false);
-  setStatus("Thinking...", "thinking");
-  startThinkingDots();  // animated dots — reassures user the request is in flight
-  callBackend("COMMAND", { sessionId: sessionId, text: text }, function (err, res) {
-    stopThinkingDots();
-    if (err) {
-      // Give a friendlier message when it's a timeout (Apps Script was just slow).
-      var msg = (err.message || "").indexOf("timed out") !== -1
-        ? "Taking longer than expected — please tap the mic and try again."
-        : err.message;
-      showError(msg); setStatus("Error — tap to retry", "error"); readyForNextTurn(); return;
-    }
-    if (!res || res.ok === false) {
-      showError(res && res.error ? res.error + (res.detail ? " — " + res.detail : "") : "Something went wrong.");
-      setStatus("Error", "error"); readyForNextTurn(); return;
-    }
-    showError("");
-    applyResponse(res);
-
-    // ── ORDER PLACED: stop hands-free, end the session ───────────────────
-    if (res.intent === "ORDER_PLACED") {
-      // Stop the idle timer and hands-free mic — no more auto-listening.
-      handsFreeActive = false;
-      if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-      idlePromptsGiven = 0;
-      stopThinkingDots();
-      busy = false;
-      setMicEnabled(true);
-
-      // Speak the confirmation, then show a clear "tap to start new order" state.
-      speakThen(res, function () {
-        setStatus("Order placed ✓  — tap the mic to start a new order", "");
-        setMicListening(false);
-        // Reset session so the NEXT tap starts fresh onboarding.
-        setTimeout(function () {
-          sessionId = "";
-          currentLanguage = "en-IN";
-          onboardStep = "ASK_PHONE";
-          started = false;
-        }, 2000);   // small delay so the order confirmation stays visible briefly
-      });
-      return;
-    }
-    // ─────────────────────────────────────────────────────────────────────
-
-    speakThen(res, function () {
-      readyForNextTurn();
-      scheduleIdleCheck();  // start idle countdown after assistant finishes
-    });
-  });
-}
-
-/* CART */
+/* ── CART ────────────────────────────────────────────────────────────────── */
 function refreshCart() {
   if (!sessionId) return;
   callBackend("CART", { sessionId: sessionId }, function (err, res) {
@@ -461,14 +332,15 @@ function refreshCart() {
     renderCart(res);
   });
 }
+
 function renderCart(cart) {
   var c = $("cart"); c.innerHTML = "";
-  if (!cart || !cart.items || cart.items.length === 0) {
+  if (!cart || !cart.items || !cart.items.length) {
     c.innerHTML = '<div class="empty">Your cart is empty.</div>';
     $("total").textContent = "₹0"; return;
   }
   cart.items.forEach(function (it) {
-    var row = document.createElement("div"); row.className = "cart-item";
+    var row  = document.createElement("div"); row.className = "cart-item";
     var left = document.createElement("div");
     left.innerHTML = '<div class="cart-name">' + esc(it.itemName) + '</div>' +
       '<div class="cart-qty">' + it.quantity + " × ₹" + it.unitPrice + "</div>";
@@ -477,241 +349,655 @@ function renderCart(cart) {
   });
   $("total").textContent = "₹" + (cart.total || 0);
 }
+
 function esc(v) {
-  return String(v || "").replace(/&/g, "&amp;").replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  return String(v || "").replace(/&/g,"&amp;").replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;");
 }
 
-/* SPEECH-TO-TEXT (record raw PCM -> WAV -> Sarvam) */
-function sttLang() {
-  // Phone number and name capture: English STT is most accurate for digits/names.
-  // Language selection step: auto-detect so customer can answer in any language.
-  // Ordering: use the customer's chosen language.
-  if (onboardStep === "ASK_LANGUAGE") return "unknown";
-  if (onboardStep === "ASK_PHONE" || onboardStep === "ASK_NAME") return "en-IN";
-  return currentLanguage || "en-IN";
-}
+/* ══════════════════════════════════════════════════════════════════════════
+   ONBOARDING FLOW  (unchanged — phone → language → name via Apps Script)
+   Uses browser speechSynthesis to speak prompts.
+   Once onboardStep === "ORDERING", all voice goes through Gemini Live.
+   ══════════════════════════════════════════════════════════════════════════ */
 
-async function startListening() {
-  if (busy || listening) return;
-  showError("");
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (e) {
-    showError("Microphone permission denied. Please allow it and try again.");
-    return;
-  }
-
-  pcmChunks = [];
-  speechStarted = false;
-  recordStartAt = Date.now();
-  listening = true;
-  setMicListening(true);
-  setStatus("Listening… speak now", "listening");
-  setHeard("Listening…");
-
-  try {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    recSampleRate = audioCtx.sampleRate;
-    sourceNode = audioCtx.createMediaStreamSource(micStream);
-    procNode = audioCtx.createScriptProcessor(4096, 1, 1);
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 2048;
-    var silData = new Uint8Array(analyser.fftSize);
-
-    sourceNode.connect(analyser);
-    sourceNode.connect(procNode);
-    procNode.connect(audioCtx.destination);
-
-    procNode.onaudioprocess = function (ev) {
-      if (!listening) return;
-      var input = ev.inputBuffer.getChannelData(0);
-      pcmChunks.push(new Float32Array(input));
-
-      analyser.getByteTimeDomainData(silData);
-      var sum = 0;
-      for (var i = 0; i < silData.length; i++) { var x = (silData[i] - 128) / 128; sum += x * x; }
-      var rms = Math.sqrt(sum / silData.length);
-      var elapsed = Date.now() - recordStartAt;
-
-      if (rms > 0.012) {
-        speechStarted = true;
-        clearTimeout(silenceTimer); silenceTimer = null;
-      } else if (speechStarted && elapsed > 1500 && !silenceTimer) {
-        // Wait ~2s of silence after speech before stopping, so short words and
-        // natural pauses aren't cut off prematurely.
-        silenceTimer = setTimeout(function () { if (listening) stopListening(); }, 2000);
+function startSession() {
+  busy = true; setMicEnabled(false);
+  setStatus("Connecting...", "thinking");
+  callBackend("ONBOARD_START", {}, function (err, res) {
+    if (err) {
+      showError(err.message); setStatus("Connection failed", "error");
+      readyForNextTurn(); return;
+    }
+    if (!res || res.ok === false) {
+      showError((res && res.error) || "Unable to start.");
+      setStatus("Error", "error"); readyForNextTurn(); return;
+    }
+    showError("");
+    applyResponse(res);
+    refreshCart();
+    handsFreeActive = true;
+    idlePromptsGiven = 0;
+    var text = (res && res.speak) || "";
+    speakBrowser(text, function () {
+      // If onboarding completed immediately (returning customer), open Live.
+      if (onboardStep === "ORDERING") {
+        openLiveSession();
+      } else {
+        readyForNextTurn();
       }
-    };
-  } catch (e) {
-    showError("Could not start recording: " + (e && e.message ? e.message : e));
-    listening = false; setMicListening(false); cleanupMic();
-    return;
-  }
-
-  maxTimer = setTimeout(function () { if (listening) stopListening(); }, 15000);
-}
-
-function stopListening() {
-  if (!listening) return;
-  listening = false;
-  clearTimeout(silenceTimer); clearTimeout(maxTimer);
-  setMicListening(false);
-  setStatus("Processing…", "thinking");
-
-  var sampleRate = recSampleRate || 16000;
-  cleanupMic();
-
-  var total = 0;
-  for (var i = 0; i < pcmChunks.length; i++) total += pcmChunks[i].length;
-  console.log("Captured PCM samples:", total, "@", sampleRate, "Hz");
-  if (total < sampleRate * 0.3) {
-    showError("Too little audio captured. Speak a bit longer.");
-    readyForNextTurn("Tap the mic and speak again");
-    return;
-  }
-
-  var merged = new Float32Array(total);
-  var off = 0;
-  for (var j = 0; j < pcmChunks.length; j++) { merged.set(pcmChunks[j], off); off += pcmChunks[j].length; }
-  pcmChunks = [];
-
-  var wavBlob = encodeWav(merged, sampleRate);
-  transcribeAndSend(wavBlob, "audio/wav");
-}
-
-function cleanupMic() {
-  clearTimeout(silenceTimer); clearTimeout(maxTimer);
-  try { if (procNode) { procNode.disconnect(); procNode.onaudioprocess = null; } } catch (e) {}
-  try { if (sourceNode) sourceNode.disconnect(); } catch (e) {}
-  try { if (analyser) analyser.disconnect(); } catch (e) {}
-  procNode = null; sourceNode = null; analyser = null;
-  if (micStream) { micStream.getTracks().forEach(function (t) { t.stop(); }); micStream = null; }
-  if (audioCtx) { try { audioCtx.close(); } catch (e) {} audioCtx = null; }
-}
-
-function encodeWav(samples, sampleRate) {
-  var buffer = new ArrayBuffer(44 + samples.length * 2);
-  var view = new DataView(buffer);
-  function wr(o, s) { for (var i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); }
-  wr(0, "RIFF");
-  view.setUint32(4, 36 + samples.length * 2, true);
-  wr(8, "WAVE"); wr(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  wr(36, "data");
-  view.setUint32(40, samples.length * 2, true);
-  var off = 44;
-  for (var i = 0; i < samples.length; i++, off += 2) {
-    var s = Math.max(-1, Math.min(1, samples[i]));
-    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-  }
-  return new Blob([view], { type: "audio/wav" });
-}
-
-function blobToBase64(blob) {
-  return new Promise(function (resolve, reject) {
-    var r = new FileReader();
-    r.onloadend = function () {
-      var s = String(r.result || "");
-      var c = s.indexOf(",");
-      resolve(c >= 0 ? s.substring(c + 1) : s);
-    };
-    r.onerror = reject;
-    r.readAsDataURL(blob);
+    });
   });
 }
 
-async function transcribeAndSend(blob, mimeType) {
+/* Called for each onboarding turn (phone/language/name) */
+function sendOnboardText(text) {
+  text = String(text || "").trim();
+  if (!text) { readyForNextTurn("Didn't catch that — listening again…"); return; }
+  customerSpoke();
+  setHeard(text);
+  busy = true; setMicEnabled(false);
+  setStatus("Thinking...", "thinking");
+  startThinkingDots();
+  callBackend("COMMAND", { sessionId: sessionId, text: text }, function (err, res) {
+    stopThinkingDots();
+    if (err) {
+      var msg = (err.message || "").indexOf("timed out") !== -1
+        ? "Taking longer than expected — please tap the mic and try again." : err.message;
+      showError(msg); setStatus("Error — tap to retry", "error"); readyForNextTurn(); return;
+    }
+    if (!res || res.ok === false) {
+      showError(res && res.error ? res.error + (res.detail ? " — " + res.detail : "") : "Something went wrong.");
+      setStatus("Error", "error"); readyForNextTurn(); return;
+    }
+    showError("");
+    applyResponse(res);
+    var spoken = (res && res.speak) || "";
+    speakBrowser(spoken, function () {
+      if (onboardStep === "ORDERING") {
+        // Onboarding just finished — open Gemini Live for food ordering.
+        openLiveSession();
+      } else {
+        readyForNextTurn();
+      }
+    });
+  });
+}
+
+/* ── ONBOARDING MIC (simple — record a short clip, send to Apps Script) ─── */
+// During onboarding we still record PCM and send to Apps Script because we need
+// the ONBOARD_TURN server logic (phone lookup, language detection, name parsing).
+// After onboarding, EVERYTHING goes through Gemini Live.
+
+var obMicStream = null, obAudioCtx = null, obSrcNode = null;
+var obProcNode  = null, obAnalyser = null;
+var obPcmChunks = [], obSampleRate = 16000;
+var obSilTimer  = null, obMaxTimer = null;
+var obSpeechStarted = false, obRecordAt = 0;
+var obListening = false;
+
+function obStartListening() {
+  if (busy || obListening) return;
+  showError("");
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+    obMicStream = stream;
+    obPcmChunks = []; obSpeechStarted = false; obRecordAt = Date.now();
+    obListening = true;
+    setMicListening(true);
+    setStatus("Listening… speak now", "listening");
+    setHeard("Listening…");
+
+    obAudioCtx  = new (window.AudioContext || window.webkitAudioContext)();
+    obSampleRate = obAudioCtx.sampleRate;
+    obSrcNode   = obAudioCtx.createMediaStreamSource(stream);
+    obProcNode  = obAudioCtx.createScriptProcessor(4096, 1, 1);
+    obAnalyser  = obAudioCtx.createAnalyser(); obAnalyser.fftSize = 2048;
+    var silData = new Uint8Array(obAnalyser.fftSize);
+
+    obSrcNode.connect(obAnalyser);
+    obSrcNode.connect(obProcNode);
+    obProcNode.connect(obAudioCtx.destination);
+
+    obProcNode.onaudioprocess = function (ev) {
+      if (!obListening) return;
+      obPcmChunks.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
+      obAnalyser.getByteTimeDomainData(silData);
+      var sum = 0;
+      for (var i = 0; i < silData.length; i++) { var x = (silData[i]-128)/128; sum += x*x; }
+      var rms = Math.sqrt(sum / silData.length);
+      var elapsed = Date.now() - obRecordAt;
+      if (rms > 0.012) { obSpeechStarted = true; clearTimeout(obSilTimer); obSilTimer = null; }
+      else if (obSpeechStarted && elapsed > 1500 && !obSilTimer) {
+        obSilTimer = setTimeout(function () { if (obListening) obStopListening(); }, 2000);
+      }
+    };
+    obMaxTimer = setTimeout(function () { if (obListening) obStopListening(); }, 15000);
+
+  }).catch(function (e) {
+    showError("Microphone permission denied. Please allow it and try again.");
+  });
+}
+
+function obStopListening() {
+  if (!obListening) return;
+  obListening = false;
+  clearTimeout(obSilTimer); clearTimeout(obMaxTimer);
+  setMicListening(false);
+  setStatus("Processing…", "thinking");
+  obCleanupMic();
+
+  var total = 0;
+  for (var i = 0; i < obPcmChunks.length; i++) total += obPcmChunks[i].length;
+  if (total < obSampleRate * 0.3) {
+    showError("Too little audio — speak a bit longer.");
+    readyForNextTurn("Tap the mic and speak again"); return;
+  }
+  var merged = new Float32Array(total);
+  var off = 0;
+  for (var j = 0; j < obPcmChunks.length; j++) { merged.set(obPcmChunks[j], off); off += obPcmChunks[j].length; }
+  obPcmChunks = [];
+  obTranscribeAndSend(obEncodeWav(merged, obSampleRate));
+}
+
+function obCleanupMic() {
+  clearTimeout(obSilTimer); clearTimeout(obMaxTimer);
+  try { if (obProcNode) { obProcNode.disconnect(); obProcNode.onaudioprocess = null; } } catch(e) {}
+  try { if (obSrcNode)  obSrcNode.disconnect(); }  catch(e) {}
+  try { if (obAnalyser) obAnalyser.disconnect(); } catch(e) {}
+  obProcNode = null; obSrcNode = null; obAnalyser = null;
+  if (obMicStream) { obMicStream.getTracks().forEach(function(t){t.stop();}); obMicStream = null; }
+  if (obAudioCtx)  { try { obAudioCtx.close(); } catch(e) {} obAudioCtx = null; }
+}
+
+function obEncodeWav(samples, sr) {
+  var buf = new ArrayBuffer(44 + samples.length * 2);
+  var v   = new DataView(buf);
+  function wr(o, s) { for (var i=0;i<s.length;i++) v.setUint8(o+i,s.charCodeAt(i)); }
+  wr(0,"RIFF"); v.setUint32(4,36+samples.length*2,true);
+  wr(8,"WAVE"); wr(12,"fmt ");
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+  v.setUint32(24,sr,true); v.setUint32(28,sr*2,true);
+  v.setUint16(32,2,true);  v.setUint16(34,16,true);
+  wr(36,"data"); v.setUint32(40,samples.length*2,true);
+  for (var i=0,o=44; i<samples.length; i++,o+=2) {
+    var s = Math.max(-1,Math.min(1,samples[i]));
+    v.setInt16(o, s<0 ? s*0x8000 : s*0x7FFF, true);
+  }
+  return new Blob([v], {type:"audio/wav"});
+}
+
+async function obTranscribeAndSend(blob) {
   busy = true; setMicEnabled(false);
   setStatus("Transcribing…", "thinking");
-  setHeard("Transcribing your speech…");
-  var base64;
-  try { base64 = await blobToBase64(blob); }
-  catch (e) { showError("Could not read audio."); readyForNextTurn("Tap the mic to retry"); return; }
+  setHeard("Transcribing…");
 
-  // Two-step transport (works around Apps Script cross-origin POST limits):
-  //  1) POST the audio with a token using no-cors (we don't read the response).
-  //  2) Poll STT_RESULT via JSONP (GET works cross-origin) to get the transcript.
-  var token = "tok_" + Date.now() + "_" + Math.floor(Math.random() * 1e6);
+  var base64;
+  try {
+    base64 = await new Promise(function(res, rej) {
+      var r = new FileReader();
+      r.onloadend = function () { var s=String(r.result||""); var c=s.indexOf(","); res(c>=0?s.substring(c+1):s); };
+      r.onerror = rej;
+      r.readAsDataURL(blob);
+    });
+  } catch(e) { showError("Could not read audio."); readyForNextTurn("Tap the mic to retry"); return; }
+
+  var token = "tok_" + Date.now() + "_" + Math.floor(Math.random()*1e6);
 
   try {
-    console.log("Sending STT POST (no-cors), base64:", base64.length, "lang:", sttLang(), "token:", token);
-    // During ORDERING with a non-English language, ask STT to TRANSLATE to
-    // English in the same call (saves a separate translate round trip). During
-    // onboarding (language/name/phone) we transcribe as-is.
-    var sttMode = (onboardStep === "ORDERING" && currentLanguage && currentLanguage !== "en-IN")
-      ? "translate" : "transcribe";
     fetch(APPS_SCRIPT_URL + "?api=voice&action=STT&token=" + token, {
-      method: "POST",
-      mode: "no-cors",                                  // send-only; response not read
+      method: "POST", mode: "no-cors",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ audio: base64, mimeType: mimeType, lang: sttLang(), mode: sttMode, token: token })
-    }).catch(function (err) { console.warn("STT POST error (ignored, will poll):", err); });
-  } catch (e) {
-    console.warn("STT POST threw (will still poll):", e);
-  }
+      body: JSON.stringify({ audio: base64, mimeType: "audio/wav", lang: "en-IN", mode: "transcribe", token: token })
+    }).catch(function(){});
+  } catch(e) {}
 
-  // Poll for the result via JSONP.
   var attempts = 0;
-  var maxAttempts = 40;   // 40 × 0.6s = 24s window — covers slow Sarvam STT on long audio
   function poll() {
     attempts++;
     callBackend("STT_RESULT", { token: token }, function (err, res) {
       if (res && res.ready) {
-        var transcript = (res.transcript ? String(res.transcript) : "").trim();
-        if (!transcript) {
-          showError(res.error ? ("STT: " + String(res.error).substring(0, 140)) : "Empty transcript. Speak longer/clearer.");
-          readyForNextTurn("Tap the mic and try again");
-          return;
-        }
-        showError("");
-        sendText(transcript);
-        return;
+        var t = (res.transcript ? String(res.transcript) : "").trim();
+        if (!t) { showError("Empty transcript — speak longer."); readyForNextTurn("Tap the mic and try again"); return; }
+        showError(""); sendOnboardText(t); return;
       }
-      if (attempts >= maxAttempts) {
-        showError("Transcription timed out — please tap the mic and try again.");
-        readyForNextTurn("Tap the mic to try again");
-        return;
-      }
+      if (attempts >= 40) { showError("Transcription timed out — tap to retry."); readyForNextTurn("Tap to retry"); return; }
       setTimeout(poll, 600);
     });
   }
-  setTimeout(poll, 600);   // first poll at 600ms (Sarvam rarely responds faster)
+  setTimeout(poll, 600);
 }
 
-/* MIC BUTTON */
+/* ══════════════════════════════════════════════════════════════════════════
+   GEMINI LIVE  — replaces Sarvam STT + TTS entirely for the ordering phase
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/*
+   Flow:
+   1. Browser calls GET_TOKEN → Apps Script generates ephemeral token
+   2. Browser opens WebSocket to Gemini Live with token
+   3. Browser sends BidiGenerateContentSetup with system prompt + tool declarations
+   4. Gemini confirms setup → browser opens mic and starts streaming PCM audio
+   5. Gemini sends:
+      - toolCall        → browser calls TOOL_CALL on Apps Script, sends toolResponse
+      - serverContent   → browser plays audio chunks AND shows text transcript
+      - transcription   → updates "You said" with live caption
+   6. On ORDER_PLACED: close WebSocket, end session
+*/
+
+// System prompt sent to Gemini Live — same rules as the existing Gemini agent
+var LIVE_SYSTEM_PROMPT = [
+  "You are the AI waiter for Roots & Ruchi restaurant.",
+  "",
+  "RULES:",
+  "1. The MENU Google Sheet is the ONLY source of truth for items and prices.",
+  "2. NEVER invent a menu item or price.",
+  "3. When the customer mentions food, ALWAYS call search_menu first.",
+  "4. Add items using add_to_cart with the exact Item_ID from search_menu.",
+  "5. After every cart change call view_cart to confirm and speak the updated total.",
+  "6. If multiple items match a name, ask the customer to clarify.",
+  "7. Never place the order until the customer explicitly confirms.",
+  "8. When the customer says 'yes', 'place order', 'confirm' etc, call create_order.",
+  "9. Speak naturally and concisely — this is a voice interaction.",
+  "10. You support English, Kannada, Hindi, Tamil and Telugu.",
+  "    Detect the customer's language and respond in the same language.",
+  "SESSION_ID: {{SESSION_ID}}"
+].join("\n");
+
+function openLiveSession() {
+  setStatus("Connecting to Gemini Live…", "thinking");
+  setMicEnabled(false);
+
+  // Step 1: get ephemeral token from Apps Script
+  callBackend("GET_TOKEN", { sessionId: sessionId }, function (err, res) {
+    if (err || !res || !res.ok || !res.token) {
+      showError("Could not get voice token: " + (err ? err.message : (res && res.error) || "unknown"));
+      setStatus("Error — tap to retry", "error");
+      setMicEnabled(true);
+      return;
+    }
+    liveToken = res.token;
+    liveConnect();
+  });
+}
+
+function liveConnect() {
+  if (liveWs) { try { liveWs.close(); } catch(e) {} liveWs = null; }
+  liveReady    = false;
+  liveListening = false;
+
+  // Ephemeral token is used as the API key for the constrained endpoint
+  var url = LIVE_WS_URL + "?key=" + encodeURIComponent(liveToken);
+  liveWs = new WebSocket(url);
+
+  liveWs.onopen = function () {
+    // Send setup message
+    var systemPrompt = LIVE_SYSTEM_PROMPT.replace("{{SESSION_ID}}", sessionId);
+
+    // Build tool declarations — mirrors getHotelTools() from Code.gs
+    var tools = [{
+      functionDeclarations: [
+        {
+          name: "search_menu",
+          description: "Search the restaurant menu. Always call before adding items.",
+          parameters: {
+            type: "OBJECT",
+            properties: {
+              query:       { type: "STRING", description: "Food name or keyword." },
+              max_price:   { type: "NUMBER", description: "Max price filter (optional)." },
+              category:    { type: "STRING", description: "Category filter (optional)." },
+              veg_nonveg:  { type: "STRING", description: "Veg or Non-Veg filter (optional)." }
+            }
+          }
+        },
+        {
+          name: "add_to_cart",
+          description: "Add a menu item to the cart. Use Item_ID from search_menu.",
+          parameters: {
+            type: "OBJECT",
+            properties: {
+              item_id:  { type: "STRING", description: "Exact Item_ID from search_menu." },
+              quantity: { type: "NUMBER", description: "Quantity to add." }
+            },
+            required: ["item_id", "quantity"]
+          }
+        },
+        {
+          name: "set_cart_quantity",
+          description: "Set the quantity of an item already in the cart.",
+          parameters: {
+            type: "OBJECT",
+            properties: {
+              item_id:  { type: "STRING", description: "Item_ID." },
+              quantity: { type: "NUMBER", description: "New quantity (0 = remove)." }
+            },
+            required: ["item_id", "quantity"]
+          }
+        },
+        {
+          name: "remove_from_cart",
+          description: "Remove an item from the cart completely.",
+          parameters: {
+            type: "OBJECT",
+            properties: {
+              item_id: { type: "STRING", description: "Item_ID to remove." }
+            },
+            required: ["item_id"]
+          }
+        },
+        {
+          name: "view_cart",
+          description: "Show the current cart and total.",
+          parameters: { type: "OBJECT", properties: {} }
+        },
+        {
+          name: "create_order",
+          description: "Finalize and place the order. Only call after explicit customer confirmation.",
+          parameters: { type: "OBJECT", properties: {} }
+        }
+      ]
+    }];
+
+    var setup = {
+      setup: {
+        model: LIVE_MODEL,
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        tools: tools,
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: "Charon" } }
+          }
+        }
+      }
+    };
+    liveWs.send(JSON.stringify(setup));
+    setStatus("Setting up…", "thinking");
+  };
+
+  liveWs.onmessage = function (event) {
+    var data;
+    try { data = JSON.parse(event.data); } catch(e) { return; }
+    liveHandleMessage(data);
+  };
+
+  liveWs.onerror = function (e) {
+    console.error("Gemini Live WS error", e);
+    showError("Voice connection error — tap to retry.");
+    setStatus("Error", "error");
+    setMicEnabled(true);
+    liveListening = false;
+    liveReady = false;
+  };
+
+  liveWs.onclose = function (e) {
+    console.log("Gemini Live WS closed", e.code, e.reason);
+    liveListening = false;
+    liveReady = false;
+    liveStopMic();
+  };
+}
+
+function liveHandleMessage(data) {
+
+  // ── Setup complete ────────────────────────────────────────────────────
+  if (data.setupComplete) {
+    liveReady = true;
+    setStatus("Listening…", "listening");
+    setAssistant("Go ahead — tell me what you'd like to order.");
+    liveStartMic();
+    scheduleIdleCheck();
+    return;
+  }
+
+  // ── Tool call ─────────────────────────────────────────────────────────
+  if (data.toolCall && data.toolCall.functionCalls) {
+    data.toolCall.functionCalls.forEach(function (fc) {
+      setStatus("Processing…", "thinking");
+      callBackend("TOOL_CALL", {
+        sessionId: sessionId,
+        toolName:  fc.name,
+        toolArgs:  JSON.stringify(fc.args || {})
+      }, function (err, res) {
+        var toolResult = (err || !res || !res.ok) ? { error: String(err ? err.message : res && res.error) } : (res.result || {});
+
+        // Refresh cart UI after any cart mutation
+        var cartMutations = ["add_to_cart","set_cart_quantity","remove_from_cart","create_order","view_cart"];
+        if (cartMutations.indexOf(fc.name) !== -1 && toolResult && !toolResult.error) {
+          refreshCart();
+          // Detect ORDER_PLACED
+          if (fc.name === "create_order" && toolResult.orderId) {
+            liveHandleOrderPlaced(toolResult);
+          }
+        }
+
+        // Send tool response back to Gemini Live
+        if (liveWs && liveWs.readyState === WebSocket.OPEN) {
+          var toolResp = {
+            toolResponse: {
+              functionResponses: [{
+                id:       fc.id,
+                name:     fc.name,
+                response: { result: toolResult }
+              }]
+            }
+          };
+          liveWs.send(JSON.stringify(toolResp));
+        }
+        setStatus("Listening…", "listening");
+      });
+    });
+    return;
+  }
+
+  // ── Audio response ────────────────────────────────────────────────────
+  if (data.serverContent) {
+    var sc = data.serverContent;
+
+    // Input transcription (what the customer said)
+    if (sc.inputTranscription && sc.inputTranscription.text) {
+      setHeard(sc.inputTranscription.text);
+      customerSpoke();
+    }
+
+    // Output transcription (what Gemini said)
+    if (sc.outputTranscription && sc.outputTranscription.text) {
+      setAssistant(sc.outputTranscription.text);
+    }
+
+    // Audio chunks — queue and play
+    if (sc.modelTurn && sc.modelTurn.parts) {
+      sc.modelTurn.parts.forEach(function (part) {
+        if (part.inlineData && part.inlineData.mimeType === "audio/pcm;rate=24000") {
+          var pcmB64 = part.inlineData.data;
+          liveEnqueueAudio(pcmB64);
+        }
+        // Text part (fallback display)
+        if (part.text) {
+          setAssistant(part.text);
+        }
+      });
+    }
+
+    // Turn complete — resume listening after model finishes
+    if (sc.turnComplete) {
+      setStatus("Listening…", "listening");
+      resetIdleTimer();
+      scheduleIdleCheck();
+    }
+  }
+}
+
+/* ── ORDER PLACED via Gemini Live ─────────────────────────────────────────── */
+function liveHandleOrderPlaced(orderResult) {
+  handsFreeActive = false;
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  // Let Gemini finish speaking the confirmation, then reset.
+  setTimeout(function () {
+    liveClose();
+    setStatus("Order placed ✓ — tap the mic to start a new order", "");
+    setMicListening(false);
+    setTimeout(function () {
+      sessionId = ""; currentLanguage = "en-IN"; onboardStep = "ASK_PHONE";
+      started = false;
+    }, 2000);
+  }, 4000);
+}
+
+/* ── GEMINI LIVE AUDIO PLAYBACK ──────────────────────────────────────────── */
+function liveEnqueueAudio(base64Pcm) {
+  liveOutputQueue.push(base64Pcm);
+  if (!liveOutputBusy) livePlayNext();
+}
+
+function livePlayNext() {
+  if (!liveOutputQueue.length) { liveOutputBusy = false; return; }
+  liveOutputBusy = true;
+  var b64 = liveOutputQueue.shift();
+  try {
+    var raw = atob(b64);
+    var buf = new ArrayBuffer(raw.length);
+    var view = new Uint8Array(buf);
+    for (var i = 0; i < raw.length; i++) view[i] = raw.charCodeAt(i);
+
+    // Gemini Live output: 16-bit PCM, 24 kHz, little-endian, mono
+    var samples = new Int16Array(buf);
+    var floats  = new Float32Array(samples.length);
+    for (var j = 0; j < samples.length; j++) floats[j] = samples[j] / 32768;
+
+    if (!liveAudioCtx) {
+      liveAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+    }
+    var abuf = liveAudioCtx.createBuffer(1, floats.length, 24000);
+    abuf.copyToChannel(floats, 0);
+    var src = liveAudioCtx.createBufferSource();
+    src.buffer = abuf;
+    src.connect(liveAudioCtx.destination);
+    src.onended = function () { livePlayNext(); };
+    src.start();
+    setStatus("Speaking…", "speaking");
+  } catch (e) {
+    console.warn("livePlayNext error:", e);
+    liveOutputBusy = false;
+    livePlayNext();
+  }
+}
+
+/* ── GEMINI LIVE MIC STREAMING ───────────────────────────────────────────── */
+function liveStartMic() {
+  if (liveListening || !liveReady) return;
+  navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } })
+    .then(function (stream) {
+      liveMicStream = stream;
+      liveListening = true;
+      setMicListening(true);
+
+      if (!liveAudioCtx) {
+        liveAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      }
+      // Resume AudioContext if suspended (browser autoplay policy)
+      if (liveAudioCtx.state === "suspended") liveAudioCtx.resume();
+
+      liveSrcNode  = liveAudioCtx.createMediaStreamSource(stream);
+      liveProcNode = liveAudioCtx.createScriptProcessor(4096, 1, 1);
+
+      liveProcNode.onaudioprocess = function (ev) {
+        if (!liveListening || !liveWs || liveWs.readyState !== WebSocket.OPEN) return;
+        var floats  = ev.inputBuffer.getChannelData(0);
+        // Convert Float32 → Int16 PCM
+        var int16   = new Int16Array(floats.length);
+        for (var i = 0; i < floats.length; i++) {
+          var s = Math.max(-1, Math.min(1, floats[i]));
+          int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        // Base64-encode the PCM chunk
+        var bytes = new Uint8Array(int16.buffer);
+        var bin   = "";
+        for (var b = 0; b < bytes.length; b++) bin += String.fromCharCode(bytes[b]);
+        var b64 = btoa(bin);
+
+        var msg = {
+          realtimeInput: {
+            mediaChunks: [{
+              mimeType: "audio/pcm;rate=16000",
+              data: b64
+            }]
+          }
+        };
+        liveWs.send(JSON.stringify(msg));
+      };
+
+      liveSrcNode.connect(liveProcNode);
+      liveProcNode.connect(liveAudioCtx.destination);
+    })
+    .catch(function (e) {
+      showError("Microphone permission denied. Please allow it and try again.");
+      liveListening = false;
+    });
+}
+
+function liveStopMic() {
+  liveListening = false;
+  setMicListening(false);
+  try { if (liveProcNode) { liveProcNode.disconnect(); liveProcNode.onaudioprocess = null; } } catch(e){}
+  try { if (liveSrcNode)  liveSrcNode.disconnect(); } catch(e){}
+  liveProcNode = null; liveSrcNode = null;
+  if (liveMicStream) { liveMicStream.getTracks().forEach(function(t){t.stop();}); liveMicStream = null; }
+}
+
+function liveClose() {
+  liveStopMic();
+  if (liveWs) { try { liveWs.close(); } catch(e){} liveWs = null; }
+  liveReady     = false;
+  liveToken     = null;
+  liveOutputQueue = [];
+  liveOutputBusy  = false;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   MIC BUTTON — routes to onboarding (JSONP) or Gemini Live based on state
+   ══════════════════════════════════════════════════════════════════════════ */
 function onMicTap() {
   unlockAudio();
+
+  // First tap: start the session
   if (!started) {
     started = true;
-    startSession();  // first tap → connect and activate hands-free
+    startSession();
     return;
   }
   if (busy) return;
-  // Manual tap while hands-free is running: toggle pause/resume.
-  if (listening) {
-    stopListening();
-    handsFreeActive = false;  // user paused manually — stop auto-restart
-    setStatus("Paused — tap to resume", "");
+
+  if (onboardStep === "ORDERING") {
+    // In ordering phase: toggle Gemini Live mic
+    if (liveListening) {
+      liveStopMic();
+      handsFreeActive = false;
+      setStatus("Paused — tap to resume", "");
+    } else {
+      handsFreeActive = true;
+      customerSpoke();
+      if (liveReady) {
+        liveStartMic();
+      } else {
+        openLiveSession();
+      }
+    }
   } else {
-    handsFreeActive = true;   // resume hands-free
-    customerSpoke();          // reset idle timer
-    startListening();
+    // In onboarding phase: toggle PCM mic → Apps Script STT
+    if (obListening) {
+      obStopListening();
+    } else {
+      obStartListening();
+    }
   }
 }
 
-/* NEW ORDER */
+/* ── NEW ORDER ─────────────────────────────────────────────────────────── */
 function startNewOrder() {
   unlockAudio();
-  if (listening) stopListening();
-  cleanupMic();
-  // Reset all session + hands-free + idle state.
+  liveClose();
+  obStopListening();
+  obCleanupMic();
   sessionId = ""; currentLanguage = "en-IN"; onboardStep = "ASK_PHONE";
   handsFreeActive = false;
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
@@ -723,10 +1009,16 @@ function startNewOrder() {
   startSession();
 }
 
-/* INIT */
+/* ── INIT ────────────────────────────────────────────────────────────────── */
 window.addEventListener("load", function () {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !(window.AudioContext || window.webkitAudioContext)) {
-    setStatus("Recording not supported — use a modern browser", "error");
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia ||
+      !(window.AudioContext || window.webkitAudioContext)) {
+    setStatus("Recording not supported — use Chrome or Edge", "error");
+    setMicEnabled(false);
+    return;
+  }
+  if (typeof WebSocket === "undefined") {
+    setStatus("WebSocket not supported — use Chrome or Edge", "error");
     setMicEnabled(false);
     return;
   }
