@@ -54,7 +54,7 @@ button.secondary { border: 1px solid #5b2c1f; background: white; color: #5b2c1f;
     <div class="mic-area">
       <button id="micButton" onclick="onMicTap()">🎙️</button>
       <div class="mic-label" id="micLabel">Tap to talk</div>
-      <div class="hint">Tap the mic once to start — conversation continues hands-free.</div>
+      <div class="hint">Tap the mic, speak, then tap again (or pause) to send.</div>
     </div>
   </div>
 
@@ -196,10 +196,10 @@ function stopAudio() {
   if ("speechSynthesis" in window) { try { window.speechSynthesis.cancel(); } catch (e) {} }
 }
 
-/* Speak the reply, then call onDone AFTER speaking finishes.
-   For English (browser TTS): wait for utterance to end before re-enabling the mic.
-   For non-English (Sarvam TTS fetched in background): fire onDone immediately
-   since audio plays asynchronously and we don't want to block the UI. */
+/* Speak the reply. For English (browser TTS) onDone fires AFTER the
+   utterance ends so the mic never opens while the assistant is talking.
+   For non-English (Sarvam audio fetched in background) onDone fires
+   immediately because there is no synchronous end-of-audio event. */
 function speakThen(res, onDone) {
   stopAudio();
   resetIdleTimer();
@@ -211,33 +211,28 @@ function speakThen(res, onDone) {
   var needAudio = res && res.needAudio && res.language && res.language !== "en-IN";
 
   if (!needAudio) {
-    // English path: disable the mic WHILE speaking, re-enable only after speech ends.
     if (text && ("speechSynthesis" in window)) {
       try {
         window.speechSynthesis.cancel();
         var u = new SpeechSynthesisUtterance(text);
         u.lang = "en-IN";
         u.rate = 1.0;
-        u.onend = function () { finish(); };
-        u.onerror = function () { finish(); };  // always unblock even on error
+        // Fire onDone only AFTER speaking ends so mic doesn't open mid-sentence.
+        u.onend   = function () { finish(); };
+        u.onerror = function () { finish(); };   // always unblock on error too
         window.speechSynthesis.speak(u);
-
-        // Safety net: if speechSynthesis never fires onend (Chrome bug on some
-        // platforms), unblock after a generous timeout so the mic isn't stuck.
-        var safetyMs = Math.max(4000, text.length * 70);
-        setTimeout(function () { finish(); }, safetyMs);
+        // Safety net: Chrome sometimes never fires onend. Unblock after
+        // a generous estimate (70 ms per character, minimum 5 s).
+        setTimeout(function () { finish(); }, Math.max(5000, text.length * 70));
         return;
-      } catch (e) {
-        // Fall through to finish() below if speech setup throws.
-      }
+      } catch (e) { /* fall through */ }
     }
-    // No text or speech not supported — unblock immediately.
+    // No text, speech not supported, or setup threw — unblock immediately.
     finish();
     return;
   }
 
-  // Non-English: fire onDone immediately so the UI unblocks while Sarvam
-  // audio is fetched and played in the background.
+  // Non-English: fire onDone now, play Sarvam audio in background.
   finish();
   callBackend("TTS", { lang: res.language, text: text }, function (err, a) {
     if (err || !a || !a.audio) return;
@@ -326,49 +321,44 @@ function onIdleTick() {
   idlePromptsGiven++;
 
   if (idlePromptsGiven >= MAX_IDLE_PROMPTS) {
-    // Third strike — end the session and clear the cart.
-    handsFreeActive = false;
-    setAssistant(prompt);
-    setStatus("Session ended", "");
-    if ("speechSynthesis" in window) {
-      try {
-        window.speechSynthesis.cancel();
-        var u = new SpeechSynthesisUtterance(prompt);
-        u.lang = "en-IN";
-        window.speechSynthesis.speak(u);
-      } catch (e) {}
-    }
+    // Third strike — stop everything, clear cart, return to initial state.
+    handsFreeActive = false;        // stop any pending mic auto-restart
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+    stopListening();                // stop mic if open
+    setMicEnabled(false);           // disable during the farewell speech
+
     // Clear cart on backend.
     if (sessionId) {
       callBackend("COMMAND", { sessionId: sessionId, text: "__force_clear__" }, function () {});
     }
-    // Reset UI to a clean "tap to start" state after a short pause.
-    setTimeout(function () {
+
+    var farewell = IDLE_PROMPTS_EN[IDLE_PROMPTS_EN.length - 1];
+    setAssistant(farewell);
+    setStatus("Session ended", "");
+
+    // Speak farewell, then fully reset to initial "tap to start" state.
+    var farewellRes = { speak: farewell, needAudio: false };
+    speakThen(farewellRes, function () {
+      // Full reset — same as a page refresh minus the mic permission.
       sessionId = ""; currentLanguage = "en-IN"; onboardStep = "ASK_PHONE";
       idlePromptsGiven = 0;
       started = false;
+      handsFreeActive = false;
       $("cart").innerHTML = '<div class="empty">Your cart is empty.</div>';
       $("total").textContent = "₹0";
+      setHeard("Waiting...");
       setAssistant("Tap the mic to start a new order.");
       setStatus("Tap the mic to start", "");
-      setMicEnabled(true);
-    }, 4000);
+      setMicListening(false);
+      setMicEnabled(true);          // re-enable so the customer can tap again
+    });
     return;
   }
 
-  // Show prompt and speak it, then schedule the next tick.
+  // Show prompt and speak it, then schedule the next tick AFTER speaking ends.
   setAssistant(prompt);
-  if ("speechSynthesis" in window) {
-    try {
-      window.speechSynthesis.cancel();
-      var pu = new SpeechSynthesisUtterance(prompt);
-      pu.lang = "en-IN";
-      pu.onend = function () { scheduleIdleCheck(); };
-      window.speechSynthesis.speak(pu);
-    } catch (e) { scheduleIdleCheck(); }
-  } else {
-    scheduleIdleCheck();
-  }
+  var idleRes = { speak: prompt, needAudio: false };
+  speakThen(idleRes, function () { scheduleIdleCheck(); });
 }
 
 /** Cancel idle timer and reset prompt count — called when customer speaks. */
