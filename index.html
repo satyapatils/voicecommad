@@ -91,12 +91,31 @@ var APPS_SCRIPT_URL =
 /* STATE */
 var sessionId = "";
 var currentLanguage = "en-IN";
-var onboardStep = "ASK_LANGUAGE";
+var onboardStep = "ASK_PHONE";   // NEW: first step is now phone number
 var started = false;
 var listening = false;
 var busy = false;
 var sharedAudio = null;
 var audioUnlocked = false;
+
+// Hands-free: after the first tap the mic restarts automatically after
+// every assistant reply until the session ends or an error occurs.
+var handsFreeActive = false;
+
+/* ── IDLE-TIMEOUT ENGINE ────────────────────────────────────────────────────
+   After the assistant speaks, if the customer says nothing for IDLE_GAP_MS,
+   we prompt them ("Are you still there?"). After MAX_IDLE_PROMPTS ignored
+   prompts the session is ended and the cart is cleared.
+   ─────────────────────────────────────────────────────────────────────────── */
+var IDLE_GAP_MS        = 15000;   // 15 s of silence before first prompt
+var MAX_IDLE_PROMPTS   = 3;       // 3 unanswered prompts → end session
+var idleTimer          = null;
+var idlePromptsGiven   = 0;
+var IDLE_PROMPTS_EN    = [
+  "Are you still there? What would you like to order?",
+  "I'm still here — would you like to add something or place your order?",
+  "I'll close this session now. Your cart has been cleared. Tap the mic to start a new order."
+];
 
 /* Recording state (raw PCM -> WAV, because Sarvam rejects webm) */
 var micStream = null;
@@ -113,8 +132,8 @@ function setHeard(t) { $("heard").textContent = t || ""; }
 function showError(t) { $("error").textContent = t || ""; }
 function setMicListening(on) {
   var b = $("micButton");
-  if (on) { b.classList.add("listening"); b.textContent = "🛑"; $("micLabel").textContent = "Listening… tap to send"; }
-  else { b.classList.remove("listening"); b.textContent = "🎙️"; $("micLabel").textContent = "Tap to talk"; }
+  if (on) { b.classList.add("listening"); b.textContent = "🛑"; $("micLabel").textContent = "Listening… (tap to pause)"; }
+  else { b.classList.remove("listening"); b.textContent = "🎙️"; $("micLabel").textContent = handsFreeActive ? "Hands-free ON" : "Tap to talk"; }
 }
 function setMicEnabled(on) { $("micButton").disabled = !on; }
 
@@ -180,6 +199,9 @@ function stopAudio() {
 /* Speak the reply, then hand control back IMMEDIATELY (audio plays in bg). */
 function speakThen(res, onDone) {
   stopAudio();
+  // Any customer activity resets the idle counter.
+  resetIdleTimer();
+
   var done = false;
   var finish = function () { if (done) return; done = true; if (onDone) onDone(); };
 
@@ -187,7 +209,7 @@ function speakThen(res, onDone) {
   var needAudio = res && res.needAudio && res.language && res.language !== "en-IN";
 
   if (!needAudio) {
-    finish();  // re-enable mic now
+    finish();  // re-enable mic / start idle timer now
     if (text && ("speechSynthesis" in window)) {
       try {
         window.speechSynthesis.cancel();
@@ -249,9 +271,93 @@ function stopThinkingDots() {
 function readyForNextTurn(label) {
   stopThinkingDots();
   busy = false;
-  setStatus(label || "Your turn — tap the mic", "");
+  setStatus(label || "Listening…", "");
   setMicListening(false);
   setMicEnabled(true);
+
+  // Hands-free: auto-start the mic so the customer never needs to tap again.
+  if (handsFreeActive && !listening) {
+    setTimeout(function () {
+      if (!busy && !listening && handsFreeActive) startListening();
+    }, 400);  // brief pause so TTS audio doesn't immediately bleed into the mic
+  }
+}
+
+/* ── IDLE-TIMEOUT ENGINE ─────────────────────────────────────────────────── */
+
+/** Cancel any pending idle timer (called whenever the customer speaks). */
+function resetIdleTimer() {
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  // Don't reset the prompt count here — it accumulates across silences.
+}
+
+/**
+ * Start the idle countdown after the assistant finishes speaking.
+ * Only active when hands-free is on and the session is in ORDERING state.
+ */
+function scheduleIdleCheck() {
+  if (!handsFreeActive || onboardStep !== "ORDERING") return;
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(onIdleTick, IDLE_GAP_MS);
+}
+
+function onIdleTick() {
+  idleTimer = null;
+  if (busy || listening) return; // customer is already talking — ignore
+
+  var prompt = IDLE_PROMPTS_EN[Math.min(idlePromptsGiven, IDLE_PROMPTS_EN.length - 1)];
+  idlePromptsGiven++;
+
+  if (idlePromptsGiven >= MAX_IDLE_PROMPTS) {
+    // Third strike — end the session and clear the cart.
+    handsFreeActive = false;
+    setAssistant(prompt);
+    setStatus("Session ended", "");
+    if ("speechSynthesis" in window) {
+      try {
+        window.speechSynthesis.cancel();
+        var u = new SpeechSynthesisUtterance(prompt);
+        u.lang = "en-IN";
+        window.speechSynthesis.speak(u);
+      } catch (e) {}
+    }
+    // Clear cart on backend.
+    if (sessionId) {
+      callBackend("COMMAND", { sessionId: sessionId, text: "__force_clear__" }, function () {});
+    }
+    // Reset UI to a clean "tap to start" state after a short pause.
+    setTimeout(function () {
+      sessionId = ""; currentLanguage = "en-IN"; onboardStep = "ASK_PHONE";
+      idlePromptsGiven = 0;
+      started = false;
+      $("cart").innerHTML = '<div class="empty">Your cart is empty.</div>';
+      $("total").textContent = "₹0";
+      setAssistant("Tap the mic to start a new order.");
+      setStatus("Tap the mic to start", "");
+      setMicEnabled(true);
+    }, 4000);
+    return;
+  }
+
+  // Show prompt and speak it, then schedule the next tick.
+  setAssistant(prompt);
+  if ("speechSynthesis" in window) {
+    try {
+      window.speechSynthesis.cancel();
+      var pu = new SpeechSynthesisUtterance(prompt);
+      pu.lang = "en-IN";
+      pu.onend = function () { scheduleIdleCheck(); };
+      window.speechSynthesis.speak(pu);
+    } catch (e) { scheduleIdleCheck(); }
+  } else {
+    scheduleIdleCheck();
+  }
+}
+
+/** Cancel idle timer and reset prompt count — called when customer speaks. */
+function customerSpoke() {
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  idlePromptsGiven = 0;
 }
 
 /* SESSION */
@@ -264,14 +370,21 @@ function startSession() {
     showError("");
     applyResponse(res);
     refreshCart();
-    speakThen(res, function () { readyForNextTurn("Your turn — tap the mic to answer"); });
+    // Activate hands-free from this point on — customer only tapped once.
+    handsFreeActive = true;
+    idlePromptsGiven = 0;
+    speakThen(res, function () {
+      readyForNextTurn();
+      scheduleIdleCheck();
+    });
   });
 }
 
 /* SEND UTTERANCE */
 function sendText(text) {
   text = String(text || "").trim();
-  if (!text) { readyForNextTurn("Didn't catch that — tap the mic and try again"); return; }
+  if (!text) { readyForNextTurn("Didn't catch that — listening again…"); return; }
+  customerSpoke();   // reset idle timer: customer is actively talking
   setHeard(text);
   busy = true; setMicEnabled(false);
   setStatus("Thinking...", "thinking");
@@ -291,7 +404,10 @@ function sendText(text) {
     }
     showError("");
     applyResponse(res);
-    speakThen(res, function () { readyForNextTurn(); });
+    speakThen(res, function () {
+      readyForNextTurn();
+      scheduleIdleCheck();  // start idle countdown after assistant finishes
+    });
   });
 }
 
@@ -326,10 +442,11 @@ function esc(v) {
 
 /* SPEECH-TO-TEXT (record raw PCM -> WAV -> Sarvam) */
 function sttLang() {
-  // Language step: auto-detect (the user may say the language name in any
-  // accent). Name/phone: English transcribes names & digits best.
+  // Phone number and name capture: English STT is most accurate for digits/names.
+  // Language selection step: auto-detect so customer can answer in any language.
+  // Ordering: use the customer's chosen language.
   if (onboardStep === "ASK_LANGUAGE") return "unknown";
-  if (onboardStep === "ASK_NAME" || onboardStep === "ASK_PHONE") return "en-IN";
+  if (onboardStep === "ASK_PHONE" || onboardStep === "ASK_NAME") return "en-IN";
   return currentLanguage || "en-IN";
 }
 
@@ -529,10 +646,22 @@ async function transcribeAndSend(blob, mimeType) {
 /* MIC BUTTON */
 function onMicTap() {
   unlockAudio();
-  if (!started) { started = true; startSession(); return; }
+  if (!started) {
+    started = true;
+    startSession();  // first tap → connect and activate hands-free
+    return;
+  }
   if (busy) return;
-  if (listening) { stopListening(); }
-  else { startListening(); }
+  // Manual tap while hands-free is running: toggle pause/resume.
+  if (listening) {
+    stopListening();
+    handsFreeActive = false;  // user paused manually — stop auto-restart
+    setStatus("Paused — tap to resume", "");
+  } else {
+    handsFreeActive = true;   // resume hands-free
+    customerSpoke();          // reset idle timer
+    startListening();
+  }
 }
 
 /* NEW ORDER */
@@ -540,7 +669,11 @@ function startNewOrder() {
   unlockAudio();
   if (listening) stopListening();
   cleanupMic();
-  sessionId = ""; currentLanguage = "en-IN"; onboardStep = "ASK_LANGUAGE";
+  // Reset all session + hands-free + idle state.
+  sessionId = ""; currentLanguage = "en-IN"; onboardStep = "ASK_PHONE";
+  handsFreeActive = false;
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  idlePromptsGiven = 0;
   setHeard("Waiting..."); setAssistant("Starting a new order...");
   $("cart").innerHTML = '<div class="empty">Your cart is empty.</div>';
   $("total").textContent = "₹0";
