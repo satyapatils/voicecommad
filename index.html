@@ -610,27 +610,52 @@ function liveSendText(text) {
 }
 
 /* ── ORDER PLACED ───────────────────────────────────────────────────────── */
+var orderPlacedHandled = false;
 function liveHandleOrderPlaced(orderResult) {
+  if (orderPlacedHandled) return;   // guard against duplicate create_order calls
+  orderPlacedHandled = true;
+
+  // Stop EVERYTHING that could cause Gemini to keep talking / looping:
+  sessionEnded = true;          // blocks idle nudges + abnormal-close handler
   resetIdleTimer();
-  // Let Gemini finish speaking the confirmation, then close the session.
+  liveStopMic();                // stop streaming mic audio immediately
+  setStatus("Order placed ✓", "speaking");
+  setMicEnabled(false);
+
+  // Let the confirmation audio that's already queued finish, then close.
   setTimeout(function () {
-    sessionEnded = true;
-    liveClose();
+    liveClose();                // closes WebSocket → no more repeats
     setStatus("Order placed ✓ — tap the mic for a new order", "");
     setMicListening(false);
     setMicEnabled(true);
     started = false;
     sessionId = "";
-  }, 5000);
+    orderPlacedHandled = false; // reset for the next session
+  }, 4000);
 }
 
 /* ── AUDIO PLAYBACK (24 kHz PCM from Gemini) ─────────────────────────────── */
+var liveSpeakSettleTimer = null;
 function liveEnqueueAudio(b64) {
+  // New audio arrived → we're speaking; cancel any pending "done speaking".
+  if (liveSpeakSettleTimer) { clearTimeout(liveSpeakSettleTimer); liveSpeakSettleTimer = null; }
+  liveSpeaking = true;
   liveOutputQueue.push(b64);
   if (!liveOutputBusy) livePlayNext();
 }
 function livePlayNext() {
-  if (!liveOutputQueue.length) { liveOutputBusy = false; liveSpeaking = false; return; }
+  if (!liveOutputQueue.length) {
+    liveOutputBusy = false;
+    // Don't flip liveSpeaking off immediately — chunks can arrive with tiny
+    // gaps. Wait a short settle window so the mic doesn't grab the tail of
+    // the assistant's own voice and cause a repeat loop.
+    if (liveSpeakSettleTimer) clearTimeout(liveSpeakSettleTimer);
+    liveSpeakSettleTimer = setTimeout(function () {
+      liveSpeaking = false;
+      liveSpeakSettleTimer = null;
+    }, 700);
+    return;
+  }
   liveOutputBusy = true; liveSpeaking = true;
   var b64 = liveOutputQueue.shift();
   try {
@@ -662,7 +687,11 @@ function livePlayNext() {
 /* ── MIC STREAMING (16 kHz PCM → Gemini) ─────────────────────────────────── */
 function liveStartMic() {
   if (liveListening || !liveReady) return;
-  navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } })
+  // echoCancellation + noiseSuppression stop the mic from picking up the
+  // assistant's own voice from the speakers (a major cause of repeat loops).
+  navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+  })
     .then(function (stream) {
       liveMicStream = stream;
       liveListening = true;
@@ -730,6 +759,7 @@ function liveClose() {
   if (liveWs) { try { liveWs.close(); } catch(e){} liveWs = null; }
   liveReady = false; liveToken = null;
   liveOutputQueue = []; liveOutputBusy = false; liveSpeaking = false;
+  if (liveSpeakSettleTimer) { clearTimeout(liveSpeakSettleTimer); liveSpeakSettleTimer = null; }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
