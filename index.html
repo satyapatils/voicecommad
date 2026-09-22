@@ -110,6 +110,16 @@ var sessionId       = "";
 var started         = false;
 var audioUnlocked   = false;
 var sessionEnded    = false;
+var currentLanguage = "en-IN";   // updated from the onboarding tool response
+
+// Map language codes to spoken names used in the instruction to Gemini.
+var LANG_NAMES = {
+  "en-IN": "English",
+  "kn-IN": "Kannada",
+  "hi-IN": "Hindi",
+  "ta-IN": "Tamil",
+  "ml-IN": "Malayalam"
+};
 
 /* ── IDLE-TIMEOUT ENGINE ─────────────────────────────────────────────────── */
 var IDLE_GAP_MS      = 15000;   // 15 s of silence
@@ -289,16 +299,25 @@ function startSession() {
 
 var LIVE_SYSTEM_PROMPT = [
   "You are the friendly AI voice waiter for Roots & Ruchi, an Indian restaurant.",
-  "Speak in Indian English by default. If the customer clearly speaks Kannada,",
-  "Hindi, Tamil or Telugu, switch to that language. Understand Indian accents,",
-  "Indian names and Indian phone numbers. Keep replies short and natural.",
+  "Supported languages: English, Kannada, Hindi, Tamil, Malayalam.",
+  "Start in Indian English. Understand Indian accents, names and phone numbers.",
+  "",
+  "IMPORTANT LANGUAGE RULE:",
+  "  Every tool response includes a 'speak_language' field. You MUST speak your",
+  "  reply in that language. If it says Kannada, reply fully in Kannada; if Hindi,",
+  "  reply in Hindi; if Tamil, reply in Tamil; if Malayalam, reply in Malayalam;",
+  "  if English, reply in English.",
+  "  Keep replies short and natural for a spoken conversation.",
   "",
   "STEP 1 — ONBOARDING (do this first, before taking any order):",
-  "  a) Greet and ask for the customer's 10-digit mobile number.",
+  "  a) Greet in English and ask for the customer's 10-digit mobile number.",
   "  b) When they say a number, call handle_customer_message with their exact words.",
-  "     The tool tells you what to ask next (it may greet a returning customer by",
-  "     name, or ask for language then name for a new customer).",
-  "  c) Always speak the 'speak' text returned by the tool, in the customer's language.",
+  "     The tool tells you what to ask next: it may welcome a returning customer by",
+  "     name (then just start taking their order), or ask a new customer for their",
+  "     language, then their name.",
+  "  c) Always speak the tool's 'speak' text, in the language given by 'speak_language'.",
+  "  d) When the customer says their language, pass their exact words to",
+  "     handle_customer_message so it can be saved.",
   "",
   "STEP 2 — ORDERING (only after the tool says onboarding is done):",
   "  • The MENU Google Sheet is the ONLY source of truth for items and prices.",
@@ -532,7 +551,17 @@ function liveRunTool(fc) {
         ? { error: String(err ? err.message : (res && res.error)) }
         : res;
       if (res && res.cart) renderCart(res.cart);
-      liveSendToolResponse(fc, { result: result });
+
+      // Track the customer's chosen language so Gemini speaks it from now on.
+      if (res && res.language && res.language !== currentLanguage) {
+        currentLanguage = res.language;
+      }
+
+      // Tell Gemini the result AND, if the language is set, instruct it to
+      // continue speaking in that language.
+      var langName = LANG_NAMES[currentLanguage] || "English";
+      var enriched = { result: result, speak_language: langName };
+      liveSendToolResponse(fc, enriched);
       setStatus("Listening…", "listening");
     });
     return;
@@ -550,7 +579,9 @@ function liveRunTool(fc) {
       refreshCart();
       if (fc.name === "create_order" && toolResult.orderId) liveHandleOrderPlaced(toolResult);
     }
-    liveSendToolResponse(fc, { result: toolResult });
+    // Keep Gemini speaking the customer's chosen language during ordering too.
+    var langName = LANG_NAMES[currentLanguage] || "English";
+    liveSendToolResponse(fc, { result: toolResult, speak_language: langName });
     setStatus("Listening…", "listening");
   });
 }
@@ -721,6 +752,7 @@ function startNewOrder() {
   liveClose();
   resetIdleTimer();
   sessionId = ""; started = false; sessionEnded = false; idlePromptsGiven = 0;
+  currentLanguage = "en-IN";
   setHeard("Waiting..."); setAssistant("Starting a new order...");
   $("cart").innerHTML = '<div class="empty">Your cart is empty.</div>';
   $("total").textContent = "₹0";
