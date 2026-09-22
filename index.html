@@ -330,7 +330,9 @@ var LIVE_SYSTEM_PROMPT = [
   "    'one tea', quantity is 1. If they say 'tea' with no number, quantity is 1.",
   "    Never guess a higher number. Call add_to_cart only ONCE per item the",
   "    customer names — do not repeat the call.",
-  "  • After every cart change call view_cart and tell the customer the running total.",
+  "  • add_to_cart already returns the updated cart and total in its result —",
+  "    read it and tell the customer the running total. Do NOT call view_cart",
+  "    separately unless the customer explicitly asks 'what's in my cart'.",
   "  • If several items match, ask the customer to choose.",
   "  • NEVER place the order until the customer clearly confirms.",
   "  • When they confirm ('yes', 'place order', 'that's all, order it'), call create_order.",
@@ -545,9 +547,28 @@ function liveHandleMessage(data) {
   }
 }
 
+/* De-dupe identical cart mutations fired within a short window (guards against
+   echo-driven or double-fired calls stacking quantities / re-ordering). */
+var lastToolSig = "";
+var lastToolAt  = 0;
+
 /* Run a tool Gemini requested → Apps Script → send result back to Gemini */
 function liveRunTool(fc) {
   setStatus("Working…", "thinking");
+
+  if (fc.name === "add_to_cart" || fc.name === "set_cart_quantity" ||
+      fc.name === "remove_from_cart" || fc.name === "create_order") {
+    var sig = fc.name + ":" + JSON.stringify(fc.args || {});
+    var now = Date.now();
+    if (sig === lastToolSig && (now - lastToolAt) < 4000) {
+      // Same call within 4s — acknowledge but DON'T re-run it.
+      liveSendToolResponse(fc, { result: { skipped: "duplicate ignored" },
+        speak_language: LANG_NAMES[currentLanguage] || "English" });
+      setStatus("Listening…", "listening");
+      return;
+    }
+    lastToolSig = sig; lastToolAt = now;
+  }
 
   // Onboarding router uses COMMAND; everything else uses TOOL_CALL.
   if (fc.name === "handle_customer_message") {
@@ -636,24 +657,37 @@ function liveHandleOrderPlaced(orderResult) {
 
 /* ── AUDIO PLAYBACK (24 kHz PCM from Gemini) ─────────────────────────────── */
 var liveSpeakSettleTimer = null;
+/* Hard-mute the mic hardware track. Airtight — no audio reaches the processor
+   while the assistant is speaking, so it can never hear itself (no repeats,
+   no accidental extra items). */
+function liveMuteMic(mute) {
+  if (!liveMicStream) return;
+  liveMicStream.getAudioTracks().forEach(function (t) { t.enabled = !mute; });
+}
+
 function liveEnqueueAudio(b64) {
-  // New audio arrived → we're speaking; cancel any pending "done speaking".
   if (liveSpeakSettleTimer) { clearTimeout(liveSpeakSettleTimer); liveSpeakSettleTimer = null; }
   liveSpeaking = true;
+  liveMuteMic(true);              // physically silence the mic while speaking
+  setMicListening(false);
   liveOutputQueue.push(b64);
   if (!liveOutputBusy) livePlayNext();
 }
 function livePlayNext() {
   if (!liveOutputQueue.length) {
     liveOutputBusy = false;
-    // Don't flip liveSpeaking off immediately — chunks can arrive with tiny
-    // gaps. Wait a short settle window so the mic doesn't grab the tail of
-    // the assistant's own voice and cause a repeat loop.
+    // Chunks can arrive with tiny gaps — wait a settle window before re-opening
+    // the mic so it doesn't grab the tail of the assistant's own voice.
     if (liveSpeakSettleTimer) clearTimeout(liveSpeakSettleTimer);
     liveSpeakSettleTimer = setTimeout(function () {
       liveSpeaking = false;
       liveSpeakSettleTimer = null;
-    }, 700);
+      if (liveListening && !sessionEnded) {
+        liveMuteMic(false);        // re-open the mic for the customer
+        setMicListening(true);
+        setStatus("Listening…", "listening");
+      }
+    }, 800);
     return;
   }
   liveOutputBusy = true; liveSpeaking = true;
@@ -695,18 +729,21 @@ function liveStartMic() {
     .then(function (stream) {
       liveMicStream = stream;
       liveListening = true;
-      setMicListening(true);
+      // Start muted if the assistant is mid-speech; otherwise open.
+      liveMuteMic(!!liveSpeaking);
+      setMicListening(!liveSpeaking);
       setMicEnabled(true);
 
       if (!liveInCtx) liveInCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
       if (liveInCtx.state === "suspended") liveInCtx.resume();
 
       liveSrcNode  = liveInCtx.createMediaStreamSource(stream);
-      liveProcNode = liveInCtx.createScriptProcessor(4096, 1, 1);
+      // Smaller buffer = lower latency (2048 samples ≈ 128ms at 16kHz).
+      liveProcNode = liveInCtx.createScriptProcessor(2048, 1, 1);
 
       liveProcNode.onaudioprocess = function (ev) {
         if (!liveListening || !liveWs || liveWs.readyState !== WebSocket.OPEN) return;
-        // Don't stream mic while the model is speaking (avoid echo).
+        // Hard mute is primary; this flag is a backup guard.
         if (liveSpeaking) return;
 
         var floats = ev.inputBuffer.getChannelData(0);
@@ -788,6 +825,7 @@ function startNewOrder() {
   resetIdleTimer();
   sessionId = ""; started = false; sessionEnded = false; idlePromptsGiven = 0;
   currentLanguage = "en-IN";
+  lastToolSig = ""; lastToolAt = 0; orderPlacedHandled = false;
   setHeard("Waiting..."); setAssistant("Starting a new order...");
   $("cart").innerHTML = '<div class="empty">Your cart is empty.</div>';
   $("total").textContent = "₹0";
