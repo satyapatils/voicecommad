@@ -311,19 +311,25 @@ var LIVE_SYSTEM_PROMPT = [
   "",
   "STEP 1 — ONBOARDING (do this first, before taking any order):",
   "  a) Greet in English and ask for the customer's 10-digit mobile number.",
-  "  b) When they say a number, call handle_customer_message with their exact words.",
-  "     The tool tells you what to ask next: it may welcome a returning customer by",
-  "     name (then just start taking their order), or ask a new customer for their",
-  "     language, then their name.",
-  "  c) Always speak the tool's 'speak' text, in the language given by 'speak_language'.",
-  "  d) When the customer says their language, pass their exact words to",
-  "     handle_customer_message so it can be saved.",
+  "  b) CRITICAL: For EVERY customer reply during onboarding (the phone number,",
+  "     the language choice, and the name), you MUST call handle_customer_message,",
+  "     passing the customer's exact words in the 'text' argument. For a phone",
+  "     number, pass the digits exactly as spoken (e.g. '9538099757'). Do NOT",
+  "     answer onboarding yourself — always call the tool and then speak its reply.",
+  "  c) Speak the tool's returned 'speak' text, in the language named by 'speak_language'.",
+  "     Until the customer chooses a language, speak_language is English — stay in English.",
+  "  d) The tool tells you the next step: welcome a returning customer by name and",
+  "     start ordering, or ask a new customer for language, then name.",
   "",
   "STEP 2 — ORDERING (only after the tool says onboarding is done):",
   "  • The MENU Google Sheet is the ONLY source of truth for items and prices.",
   "  • NEVER invent an item or price.",
   "  • When the customer mentions food, call search_menu first.",
   "  • Add items with add_to_cart using the exact Item_ID from search_menu.",
+  "  • QUANTITY RULE: pass EXACTLY the quantity the customer said. If they say",
+  "    'one tea', quantity is 1. If they say 'tea' with no number, quantity is 1.",
+  "    Never guess a higher number. Call add_to_cart only ONCE per item the",
+  "    customer names — do not repeat the call.",
   "  • After every cart change call view_cart and tell the customer the running total.",
   "  • If several items match, ask the customer to choose.",
   "  • NEVER place the order until the customer clearly confirms.",
@@ -552,16 +558,15 @@ function liveRunTool(fc) {
         : res;
       if (res && res.cart) renderCart(res.cart);
 
-      // Track the customer's chosen language so Gemini speaks it from now on.
-      if (res && res.language && res.language !== currentLanguage) {
-        currentLanguage = res.language;
-      }
+      // The backend controls the language per step:
+      //   ASK_PHONE / ASK_LANGUAGE  → 'en-IN' (ask in English)
+      //   after language chosen      → the chosen language
+      // Trust res.language for the language to SPEAK this turn.
+      var turnLang = (res && res.language) ? res.language : "en-IN";
+      currentLanguage = turnLang;   // remember for ordering turns
+      var langName = LANG_NAMES[turnLang] || "English";
 
-      // Tell Gemini the result AND, if the language is set, instruct it to
-      // continue speaking in that language.
-      var langName = LANG_NAMES[currentLanguage] || "English";
-      var enriched = { result: result, speak_language: langName };
-      liveSendToolResponse(fc, enriched);
+      liveSendToolResponse(fc, { result: result, speak_language: langName });
       setStatus("Listening…", "listening");
     });
     return;
