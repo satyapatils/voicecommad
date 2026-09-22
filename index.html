@@ -288,10 +288,10 @@ function startSession() {
    ══════════════════════════════════════════════════════════════════════════ */
 
 var LIVE_SYSTEM_PROMPT = [
-  "You are the friendly AI voice waiter for Roots & Ruchi restaurant.",
-  "You handle the WHOLE conversation by voice in the customer's language",
-  "(English, Kannada, Hindi, Tamil or Telugu). Detect their language from",
-  "how they speak and reply in that same language. Keep replies short and natural.",
+  "You are the friendly AI voice waiter for Roots & Ruchi, an Indian restaurant.",
+  "Speak in Indian English by default. If the customer clearly speaks Kannada,",
+  "Hindi, Tamil or Telugu, switch to that language. Understand Indian accents,",
+  "Indian names and Indian phone numbers. Keep replies short and natural.",
   "",
   "STEP 1 — ONBOARDING (do this first, before taking any order):",
   "  a) Greet and ask for the customer's 10-digit mobile number.",
@@ -416,7 +416,11 @@ function liveConnect() {
         tools: liveToolDeclarations(),
         generationConfig: {
           responseModalities: ["AUDIO"],
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Charon" } } }
+          speechConfig: {
+            // Indian English voice + language.
+            languageCode: "en-IN",
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: "Charon" } }
+          }
         },
         inputAudioTranscription: {},
         outputAudioTranscription: {}
@@ -470,13 +474,14 @@ function liveConnect() {
 
 function liveHandleMessage(data) {
 
-  // Setup finished → greet + open the mic
+  // Setup finished → open the mic and greet.
   if (data.setupComplete) {
     liveReady = true;
     setStatus("Listening…", "listening");
-    // Ask Gemini to greet and request the phone number.
-    liveSendText("Greet the customer for Roots and Ruchi and ask for their 10-digit mobile number.");
+    // Open the mic first so we never miss the customer's first words.
     liveStartMic();
+    // Ask Gemini to greet and request the phone number.
+    liveSendText("Please greet the customer warmly for Roots and Ruchi in Indian English and ask for their 10-digit mobile number.");
     scheduleIdleCheck();
     return;
   }
@@ -659,8 +664,10 @@ function liveStartMic() {
         var bytes = new Uint8Array(int16.buffer);
         var bin = "";
         for (var b = 0; b < bytes.length; b++) bin += String.fromCharCode(bytes[b]);
+        var b64 = btoa(bin);
+        // Current Live API expects realtimeInput.audio (single blob), NOT mediaChunks.
         liveWs.send(JSON.stringify({
-          realtimeInput: { mediaChunks: [{ mimeType: "audio/pcm;rate=16000", data: btoa(bin) }] }
+          realtimeInput: { audio: { mimeType: "audio/pcm;rate=16000", data: b64 } }
         }));
       };
 
