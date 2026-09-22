@@ -322,10 +322,20 @@ var LIVE_SYSTEM_PROMPT = [
   "     start ordering, or ask a new customer for language, then name.",
   "",
   "STEP 2 — ORDERING (only after the tool says onboarding is done):",
-  "  • The MENU Google Sheet is the ONLY source of truth for items and prices.",
-  "  • NEVER invent an item or price.",
-  "  • When the customer mentions food, call search_menu first.",
-  "  • Add items with add_to_cart using the exact Item_ID from search_menu.",
+  "  • ABSOLUTE RULE: The MENU Google Sheet is the ONLY source of truth. You may",
+  "    ONLY mention, offer, or add items that a tool (list_menu or search_menu)",
+  "    actually returned in THIS conversation. If a tool did not return an item,",
+  "    it does NOT exist. NEVER invent, guess, assume, or suggest any dish from",
+  "    general knowledge (for example: do NOT offer Chinese, North Indian, or any",
+  "    item unless it appears in a tool result).",
+  "  • When the customer asks 'what is on the menu' / 'what do you have' / 'show",
+  "    me the menu' / 'what do you serve', call list_menu and read back ONLY the",
+  "    items it returns, with their prices. If there are many, read the main ones",
+  "    and offer to continue.",
+  "  • When the customer names a specific dish, call search_menu first. If it",
+  "    returns nothing, tell them politely that item is not available — do NOT",
+  "    substitute or invent an alternative unless list_menu/search_menu returned one.",
+  "  • Add items with add_to_cart using the exact Item_ID from a tool result.",
   "  • QUANTITY RULE: pass EXACTLY the quantity the customer said. If they say",
   "    'one tea', quantity is 1. If they say 'tea' with no number, quantity is 1.",
   "    Never guess a higher number. Call add_to_cart only ONCE per item the",
@@ -355,7 +365,7 @@ function liveToolDeclarations() {
       },
       {
         name: "search_menu",
-        description: "Search the restaurant menu. Call before adding any item.",
+        description: "Search the restaurant menu by a keyword. Call before adding any item.",
         parameters: {
           type: "OBJECT",
           properties: {
@@ -365,6 +375,11 @@ function liveToolDeclarations() {
             veg_nonveg: { type: "STRING", description: "Veg or Non-Veg (optional)." }
           }
         }
+      },
+      {
+        name: "list_menu",
+        description: "Return the COMPLETE list of available menu items with prices. Call this whenever the customer asks what is on the menu, what you have, what you serve, or wants to hear the options.",
+        parameters: { type: "OBJECT", properties: {} }
       },
       {
         name: "add_to_cart",
