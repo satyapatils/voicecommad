@@ -68,6 +68,11 @@ button.secondary { border: 1px solid #5b2c1f; background: white; color: #5b2c1f;
     <div id="assistant" class="assistant">Tap the mic to begin.</div>
   </div>
 
+  <div class="card" id="menuCard" style="display:none;">
+    <div class="section-title">📋 Menu</div>
+    <div id="menuList"></div>
+  </div>
+
   <div class="card">
     <div class="section-title">🛒 Your Order</div>
     <div id="cart"><div class="empty">Your cart is empty.</div></div>
@@ -329,9 +334,13 @@ var LIVE_SYSTEM_PROMPT = [
   "    general knowledge (for example: do NOT offer Chinese, North Indian, or any",
   "    item unless it appears in a tool result).",
   "  • When the customer asks 'what is on the menu' / 'what do you have' / 'show",
-  "    me the menu' / 'what do you serve', call list_menu and read back ONLY the",
-  "    items it returns, with their prices. If there are many, read the main ones",
-  "    and offer to continue.",
+  "    me the menu' / 'what do you serve', call list_menu. The full list is shown",
+  "    on the customer's screen automatically. In your spoken reply, group the",
+  "    items by category and read out the item names (you can skip prices unless",
+  "    asked). Read ALL categories, e.g. 'In dosas we have Masala Dosa, Plain",
+  "    Dosa and Set Dosa; in drinks we have Tea, Coffee and Masala Tea...'. Do",
+  "    not stop after a few items. End with 'The full menu is on your screen —",
+  "    what would you like?'. Never invent an item that list_menu did not return.",
   "  • When the customer names a specific dish, call search_menu first. If it",
   "    returns nothing, tell them politely that item is not available — do NOT",
   "    substitute or invent an alternative unless list_menu/search_menu returned one.",
@@ -620,11 +629,33 @@ function liveRunTool(fc) {
       refreshCart();
       if (fc.name === "create_order" && toolResult.orderId) liveHandleOrderPlaced(toolResult);
     }
+    // Show the full menu ON SCREEN so the customer sees every item even though
+    // the assistant only speaks a short summary.
+    if (fc.name === "list_menu" && toolResult && toolResult.items) {
+      renderMenu(toolResult.items);
+    }
     // Keep Gemini speaking the customer's chosen language during ordering too.
     var langName = LANG_NAMES[currentLanguage] || "English";
     liveSendToolResponse(fc, { result: toolResult, speak_language: langName });
     setStatus("Listening…", "listening");
   });
+}
+
+/* Render the full menu on screen (name + price). */
+function renderMenu(items) {
+  var box = $("menuList");
+  var card = $("menuCard");
+  if (!items || !items.length) { card.style.display = "none"; return; }
+  box.innerHTML = "";
+  items.forEach(function (m) {
+    var row = document.createElement("div"); row.className = "cart-item";
+    var left = document.createElement("div");
+    left.innerHTML = '<div class="cart-name">' + esc(m.itemName) + '</div>' +
+      (m.category ? '<div class="cart-qty">' + esc(m.category) + '</div>' : '');
+    var right = document.createElement("div"); right.textContent = "₹" + (m.price || 0);
+    row.appendChild(left); row.appendChild(right); box.appendChild(row);
+  });
+  card.style.display = "block";
 }
 
 function liveSendToolResponse(fc, responseObj) {
@@ -841,6 +872,7 @@ function startNewOrder() {
   sessionId = ""; started = false; sessionEnded = false; idlePromptsGiven = 0;
   currentLanguage = "en-IN";
   lastToolSig = ""; lastToolAt = 0; orderPlacedHandled = false;
+  $("menuCard").style.display = "none"; $("menuList").innerHTML = "";
   setHeard("Waiting..."); setAssistant("Starting a new order...");
   $("cart").innerHTML = '<div class="empty">Your cart is empty.</div>';
   $("total").textContent = "₹0";
